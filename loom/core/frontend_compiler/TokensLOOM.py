@@ -1,0 +1,236 @@
+﻿"""Tokens for LOOM programming language"""
+
+TOKENS = [
+    ('LITERAL_DOUBLE', r'\d+\.\d+'),
+    ('LITERAL_INT',    r'\d+'),
+    ('LITERAL_STR',    r'"[^"\n]*"'),
+    ('LITERAL_CHAR',   r"'[^'\n]'"),
+
+    ('ID', r'[A-Za-z_][A-Za-z0-9_]*'),
+
+    ('POW_EQ',    r'\*\*='),
+    ('IDIV_EQ',   r'//='),
+    ('LSHIFT_EQ', r'<<='),
+    ('RSHIFT_EQ', r'>>='),
+    ('RANGE_DOTS_EQ', r'\.\.='),
+
+    ('ARROW_FAT', r'=>'),
+    ('ARROW',     r'->'),
+    ('POW',       r'\*\*'),
+    ('IDIV',      r'//'),
+    ('MUL_EQ',    r'\*='),
+    ('DIV_EQ',    r'/='),
+    ('MOD_EQ',    r'%='),
+    ('PLUS_EQ',   r'\+='),
+    ('MINUS_EQ',  r'-='),
+    ('AND_EQ',    r'&='),
+    ('OR_EQ',     r'\|='),
+    ('XOR_EQ',    r'\^='),
+    ('INC',       r'\+\+'),
+    ('DEC',       r'--'),
+    ('EQ',        r'=='),
+    ('NEQ',       r'!='),
+    ('LE',        r'<='),
+    ('GE',        r'>='),
+    ('AND',       r'&&'),
+    ('OR',        r'\|\|'),
+    ('LSHIFT',    r'<<'),
+    ('RSHIFT',    r'>>'),
+    ('RANGE_DOTS',r'\.\.'),
+    ('DOUBLE_COLON', r'::'),
+
+    ('ASSIGN',  r'='),
+    ('PLUS',    r'\+'),
+    ('MINUS',   r'-'),
+    ('MUL',     r'\*'),
+    ('DIV',     r'/'),
+    ('MOD',     r'%'),
+    ('NOT',     r'!'),
+    ('BIT_AND', r'&'),
+    ('BIT_OR',  r'\|'),
+    ('BIT_XOR', r'\^'),
+    ('BIT_NOT', r'~'),
+    ('LT',      r'<'),
+    ('GT',      r'>'),
+    ('QUESTION', r'\?'),
+    ('AT',       r'@'),
+    ('LPAREN',   r'\('),
+    ('RPAREN',   r'\)'),
+    ('LBRACE',   r'\{'),
+    ('RBRACE',   r'\}'),
+    ('LBRACKET', r'\['),
+    ('RBRACKET', r'\]'),
+    ('COMMA',    r','),
+    ('COLON',    r':'),
+    ('SEMICOLON',r';'),
+    ('DOT',      r'\.'),
+]
+
+KEYWORDS = {
+    # --- объявление и типы ---
+    'var':         'VAR',
+    'const':       'CONST',
+    'int':         'INT',
+    'double':      'DOUBLE',
+    'str':         'STR',
+    'char':        'CHAR',
+    'bool':        'BOOL',
+    'void':        'VOID',
+
+    # --- литералы-слова ---
+    'true':        'TRUE',
+    'false':       'FALSE',
+
+    # --- ввод/вывод ---
+    'console':     'CONSOLE',
+    'input':       'INPUT',
+
+    # --- ветвление ---
+    'if':          'IF',
+    'elif':        'ELSEIF',
+    'else':        'ELSE',
+    'endif':       'ENDIF',
+    'switch':      'SWITCH',
+    'case':        'CASE',
+    'default':     'DEFAULT',
+    'endswitch':   'ENDSWITCH',
+    'match':       'MATCH',
+    'when':        'WHEN',
+    'endmatch':    'ENDMATCH',
+
+    # --- циклы ---
+    'while':       'WHILE',
+    'endwhile':    'ENDWHILE',
+    'do':          'DO',
+    'enddo':       'ENDDO',
+    'for':         'FOR',
+    'in':          'IN',
+    'of':          'OF',
+    'range':       'RANGE',
+    'enumerate':   'ENUMERATE',
+    'zip':         'ZIP',
+    'reversed':    'REVERSED',
+    'endfor':      'ENDFOR',
+
+    # --- управление циклом ---
+    'break':       'BREAK',
+    'continue':    'CONTINUE',
+    'goto':        'GOTO',
+
+    # --- функции ---
+    'function':    'FUNCTION',
+    'lambda':      'LAMBDA',
+    'return':      'RETURN',
+    'yield':       'YIELD',
+    'endfunction': 'ENDFUNCTION',
+
+    # --- ООП ---
+    'class':       'CLASS',
+    'interface':   'INTERFACE',
+    'abstract':    'ABSTRACT',
+    'extends':     'EXTENDS',
+    'implements':  'IMPLEMENTS',
+    'super':       'SUPER',
+    'self':        'SELF',
+    'this':        'THIS',
+    'new':         'NEW',
+    'public':      'PUBLIC',
+    'private':     'PRIVATE',
+    'protected':   'PROTECTED',
+    'static':      'STATIC',
+    'override':    'OVERRIDE',
+    'constructor': 'CONSTRUCTOR',
+    'destructor':  'DESTRUCTOR',
+    'struct':      'STRUCT',
+    'record':      'RECORD',
+    'endclass':    'ENDCLASS',
+    'endstruct':   'ENDSTRUCT',
+
+    # --- модули ---
+    'import':      'IMPORT',
+    'from':        'FROM',
+    'as':          'AS',
+    'export':      'EXPORT',
+    'module':      'MODULE',
+    'package':     'PACKAGE',
+    'namespace':   'NAMESPACE',
+
+    # --- обработка ошибок ---
+    'try':         'TRY',
+    'except':      'EXCEPT',
+    'finally':     'FINALLY',
+    'raise':       'RAISE',
+    'throw':       'THROW',
+    'assert':      'ASSERT',
+    'endtry':      'ENDTRY',
+
+    # --- асинхронность ---
+    'async':       'ASYNC',
+    'await':       'AWAIT',
+    'thread':      'THREAD',
+    'process':     'PROCESS',
+    'coroutine':   'COROUTINE',
+    'mutex':       'MUTEX',
+    'semaphore':   'SEMAPHORE',
+    'lock':        'LOCK',
+    'sync':        'SYNC',
+
+    # --- функциональное ---
+    'map':         'MAP',
+    'filter':      'FILTER',
+    'reduce':      'REDUCE',
+}
+
+IGNORED = [
+    ('BOM',           r'\ufeff'),
+    ('BLOCK_COMMENT', r'###[\s\S]*?###'),
+    ('LINE_COMMENT',  r'#[^\n]*'),
+    ('WS',            r'[ \t\r\n]+'),
+]
+
+ASSIGN_OPS = {
+    'ASSIGN':    '=',
+    'PLUS_EQ':   '+=',
+    'MINUS_EQ':  '-=',
+    'MUL_EQ':    '*=',
+    'DIV_EQ':    '/=',
+    'MOD_EQ':    '%=',
+    'POW_EQ':    '**=',
+    'IDIV_EQ':   '//=',
+    'AND_EQ':    '&=',
+    'OR_EQ':     '|=',
+    'XOR_EQ':    '^=',
+    'LSHIFT_EQ': '<<=',
+    'RSHIFT_EQ': '>>=',
+}
+
+BINARY_OP_TEXT = {
+    'OR':      '||',
+    'AND':     '&&',
+    'BIT_OR':  '|',
+    'BIT_XOR': '^',
+    'BIT_AND': '&',
+    'EQ':      '==',
+    'NEQ':     '!=',
+    'LT':      '<',
+    'GT':      '>',
+    'LE':      '<=',
+    'GE':      '>=',
+    'LSHIFT':  '<<',
+    'RSHIFT':  '>>',
+    'PLUS':    '+',
+    'MINUS':   '-',
+    'MUL':     '*',
+    'DIV':     '/',
+    'IDIV':    '//',
+    'MOD':     '%',
+    'POW':     '**',
+}
+
+UNARY_OP_TEXT = {
+    'MINUS':   '-',
+    'NOT':     '!',
+    'BIT_NOT': '~',
+    'INC':     '++',
+    'DEC':     '--',
+}

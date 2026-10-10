@@ -1,0 +1,19 @@
+var x : int = 10;
+
+function add(a : int, b : int) -> int {
+    var sum : int = a + b;
+    return sum;
+}
+
+function outer() -> void {
+    var local : int = 5;
+    var f : function() -> void = lambda () => console.write(local);
+}
+
+function main() -> void {
+    var y : int = add(x, 20);
+    console.write(y);
+    outer();
+}
+
+main();

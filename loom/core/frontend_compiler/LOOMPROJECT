@@ -1,0 +1,57 @@
+<NotepadPlus>
+    <Project name="LOOM">
+        <Folder name="core">
+            <Folder name="frontend_compiler">
+                <Folder name="__pycache__">
+                    <File name="__pycache__\ErrorLOOM.cpython-314.pyc" />
+                    <File name="__pycache__\LexerLOOM.cpython-314.pyc" />
+                    <File name="__pycache__\ParserLOOM.cpython-314.pyc" />
+                    <File name="__pycache__\TokensLOOM.cpython-314.pyc" />
+                </Folder>
+                <File name="AstLOOM.py" />
+                <File name="EBNF.txt" />
+                <File name="ErrorLOOM.py" />
+                <File name="ignore.txt" />
+                <File name="LexerLOOM.py" />
+                <File name="LVM_bytecode1.txt" />
+                <File name="LVM_bytecode2.txt" />
+                <File name="main.py" />
+                <File name="parser.py" />
+                <File name="TokensLOOM.py" />
+                <Folder name="parser_complier">
+                    <File name="parser_compiler\carcass.py" />
+                    <File name="parser_compiler\concurrency.py" />
+                    <File name="parser_compiler\error_handling.py" />
+                    <File name="parser_compiler\expr.py" />
+                    <File name="parser_compiler\forloop.py" />
+                    <File name="parser_compiler\func.py" />
+                    <File name="parser_compiler\ignore.txt" />
+                    <File name="parser_compiler\misc.py" />
+                    <File name="parser_compiler\modules.py" />
+                    <File name="parser_compiler\oop.py" />
+                    <File name="parser_compiler\pattern.py" />
+                    <File name="parser_compiler\stmt.py" />
+                    <File name="parser_compiler\__init__.py" />
+                </Folder>
+                <File name="ResolverLOOM.py" />
+                <Folder name="Codegen_COMPILER">
+                    <File name="Codegen_COMPILER\carcass.py" />
+                    <File name="Codegen_COMPILER\concurrency.py" />
+                    <File name="Codegen_COMPILER\error_handling.py" />
+                    <File name="Codegen_COMPILER\expr.py" />
+                    <File name="Codegen_COMPILER\func.py" />
+                    <File name="Codegen_COMPILER\ignore.txt" />
+                    <File name="Codegen_COMPILER\misc.py" />
+                    <File name="Codegen_COMPILER\modules.py" />
+                    <File name="Codegen_COMPILER\oop.py" />
+                    <File name="Codegen_COMPILER\pattern.py" />
+                    <File name="Codegen_COMPILER\serializer.py" />
+                    <File name="Codegen_COMPILER\stmt.py" />
+                    <File name="Codegen_COMPILER\__init__.py" />
+                    <File name="Codegen_COMPILER\opcodes.py" />
+                </Folder>
+                <File name="CodegenLOOM.py" />
+            </Folder>
+        </Folder>
+    </Project>
+</NotepadPlus>

@@ -1,0 +1,326 @@
+﻿================================================================================
+          LOOM BYTECODE FILE FORMAT SPECIFICATION (.lbc)
+================================================================================
+Version : 1.0
+Target  : Loom Virtual Machine (LVM)
+Endian  : Big-Endian (Network Byte Order) for all multi-byte integers/floats
+================================================================================
+
+TABLE OF CONTENTS
+  1. File Structure Overview
+  2. Header
+  3. Constant Pool
+  4. Function Table
+  5. Class Table
+  6. Global Variables Table
+  7. Binary Layout Example
+  8. Notes on Current Implementation (v1.0)
+
+================================================================================
+1. FILE STRUCTURE OVERVIEW
+================================================================================
+
+A .lbc file is a sequential binary stream composed of the following sections
+in exact order:
+
+  [ HEADER ]
+  [ CONSTANT POOL ]
+  [ FUNCTION TABLE ]
+  [ CLASS TABLE ]
+  [ GLOBAL VARIABLES TABLE ]
+
+All string data is encoded in UTF-8.
+All multi-byte integers (u16, u32, u64) and floats (f64) are stored in
+Big-Endian format to ensure cross-platform compatibility.
+
+The file describes exactly ONE module. Multi-module programs produce multiple
+.lbc files; the VM loads them by name on IMPORT_MODULE.
+
+================================================================================
+2. HEADER (16 bytes)
+================================================================================
+
+The header identifies the file as a valid LOOM bytecode binary and provides
+global metadata.
+
+  Offset  Size  Type    Description
+  ──────  ────  ──────  ──────────────────────────────────────────────────────
+  0x00    4     bytes   MAGIC_NUMBER : Always "LOOM" (0x4C 0x4F 0x4F 0x4D)
+  0x04    1     u8      VERSION_MAJOR : Major version (currently 0x01)
+  0x05    1     u8      VERSION_MINOR : Minor version (currently 0x00)
+  0x06    1     u8      FLAGS :
+                        Bit 0: Debug Info Present (1 = LINE_NUMBER_TABLE
+                               is included in each function record)
+                        Bit 1: Strict Mode Enforced
+                        Bits 2-7: Reserved (must be 0)
+  0x07    4     u32     ENTRY_POINT : Index of the entry function in the
+                                     Function Table.
+                                     In the current compiler, the entry
+                                     function is ALWAYS index 0 and contains
+                                     the module's top-level init code.
+  0x0B    5     bytes   RESERVED : Padding to 16 bytes (must be 0).
+
+  Notes:
+    - VERSION_MAJOR mismatch between compiler and VM is a hard error.
+    - VERSION_MINOR mismatch is a warning only.
+    - In v1.0 the FLAGS.Bit0 is always set (line info is always emitted).
+    - ENTRY_POINT is always 0 in files produced by the v1.0 compiler;
+      it is kept explicit so future versions can point elsewhere.
+
+================================================================================
+3. CONSTANT POOL
+================================================================================
+
+Stores all literals and interned names used by the bytecode.
+
+  Size      Type    Description
+  ──────    ──────  ──────────────────────────────────────────────────────
+  4 bytes   u32     CONSTANT_COUNT : Number of entries in the pool.
+
+  [REPEAT CONSTANT_COUNT TIMES]:
+    1 byte    u8      TAG : Type of the constant.
+    Variable  DATA    The actual value, determined by the TAG:
+
+      TAG 0x01 (INT)    : 8 bytes (i64) - Integer literal
+      TAG 0x02 (DOUBLE) : 8 bytes (f64) - IEEE 754 Double literal
+      TAG 0x03 (STR)    : 4 bytes (u32 length) + N bytes (UTF-8 string data)
+      TAG 0x04 (CHAR)   : 4 bytes (u32 codepoint) - single Unicode character
+      TAG 0x05 (NAME)   : 4 bytes (u32 length) + N bytes (UTF-8 identifier)
+
+  NAME entries are used for:
+    - variable names (globals, locals via debug info)
+    - attribute / field names
+    - class / interface / struct / record names
+    - function names (see Section 4)
+    - module paths
+
+  The compiler MUST intern duplicate names: two occurrences of the same
+  identifier string must be stored as ONE pool entry, referenced by index.
+
+  Indices in the pool are 0-based. Tags do not affect indexing; entries
+  are numbered in order of appearance.
+
+  NOTE (v1.0): there is no dedicated FUNC_REF tag. Functions are referenced
+  by NAME (their name string) and resolved through the Function Table by
+  matching NAME_INDEX. This keeps the pool small at the cost of a linear
+  lookup when the VM creates function objects at load time.
+
+================================================================================
+4. FUNCTION TABLE
+================================================================================
+
+Contains the compiled bytecode and metadata for every function, method,
+lambda, and the module's top-level init code.
+
+Functions are indexed 0..FUNCTION_COUNT-1 in the order they appear in
+this table. Index 0 is reserved for the module's init function
+(see ENTRY_POINT).
+
+  Size      Type    Description
+  ──────    ──────  ──────────────────────────────────────────────────────
+  4 bytes   u32     FUNCTION_COUNT : Number of functions.
+
+  [REPEAT FUNCTION_COUNT TIMES]:
+    4 bytes   u32     NAME_INDEX : Index in Constant Pool (NAME) for func name.
+                                   For the module init function this is a
+                                   synthetic name such as "<init>".
+    1 byte    u8      ARITY : Number of parameters expected.
+    1 byte    u8      LOCALS_COUNT : Number of local variable slots needed
+                                     (including parameters).
+    2 bytes   u16     MAX_STACK : Maximum operand stack depth.
+                                   May be 0 in v1.0 (VM uses a fixed stack).
+    2 bytes   u16     UPVALUES_COUNT : Number of captured upvalues.
+    4 bytes   u32     BYTECODE_LENGTH : Size of the bytecode array in bytes.
+    N bytes   bytes   BYTECODE : The actual LVM opcodes.
+
+    [UPVALUE DESCRIPTORS] (present only if UPVALUES_COUNT > 0)
+    [REPEAT UPVALUES_COUNT TIMES]:
+      1 byte    u8      IS_LOCAL : 1 if capturing a local from the parent
+                                   frame, 0 if capturing a parent upvalue.
+      1 byte    u8      INDEX : Slot index in the parent frame (if IS_LOCAL=1)
+                                or upvalue index in the parent closure
+                                (if IS_LOCAL=0).
+
+    [LINE NUMBER TABLE] (present only if FLAGS.Bit0 == 1)
+    4 bytes   u32     LINE_TABLE_COUNT : Number of entries.
+    [REPEAT LINE_TABLE_COUNT TIMES]:
+      4 bytes   u32     BYTECODE_OFFSET : Byte offset in BYTECODE where the
+                                          line becomes active.
+      4 bytes   u32     SOURCE_LINE : Corresponding line number in .loom.
+
+  Notes:
+    - BYTECODE_OFFSET is measured in BYTES from the start of BYTECODE,
+      not in instructions. Instructions are variable length.
+    - The line table is sorted ascending by BYTECODE_OFFSET.
+    - ARITY counts user parameters only; receiver (this/self) is local 0
+      in methods and is not counted in ARITY.
+    - LOCALS_COUNT includes parameters. For a method with 2 params and
+      3 local vars, LOCALS_COUNT = 2 + 3 = 5 (receiver occupies no slot
+      in this scheme; if receiver is a local, add 1 accordingly).
+    - In v1.0, MAX_STACK is written as 0; the VM allocates a fixed operand
+      stack per frame.
+
+================================================================================
+5. CLASS TABLE
+================================================================================
+
+Defines the structure of all classes, structs, interfaces, and records.
+
+  Size      Type    Description
+  ──────    ──────  ──────────────────────────────────────────────────────
+  4 bytes   u32     CLASS_COUNT : Number of class-table entries.
+
+  [REPEAT CLASS_COUNT TIMES]:
+    4 bytes   u32     NAME_INDEX : Constant Pool index (NAME) of the class.
+    4 bytes   u32     SUPER_INDEX : Constant Pool index (NAME) of superclass.
+                                   0xFFFFFFFF if no superclass.
+    1 byte    u8      CLASS_FLAGS :
+                      0x01 = Abstract
+                      0x02 = Interface
+                      0x04 = Struct
+                      0x08 = Record (Immutable)
+    2 bytes   u16     FIELDS_COUNT : Number of instance fields.
+
+    [FIELDS]
+    [REPEAT FIELDS_COUNT TIMES]:
+      4 bytes   u32     FIELD_NAME_INDEX : Constant Pool index (NAME).
+
+    4 bytes   u32     METHODS_COUNT : Number of methods.
+
+    [METHODS]
+    [REPEAT METHODS_COUNT TIMES]:
+      4 bytes   u32     METHOD_NAME_INDEX : Constant Pool index (NAME).
+      4 bytes   u32     FUNC_INDEX : Index in the Function Table.
+
+  Notes:
+    - Interfaces have FIELDS_COUNT = 0 in v1.0 (only method signatures).
+    - Records have FIELDS_COUNT equal to the number of record parameters;
+      their field names use the parameter names.
+    - The order of FIELDS entries defines the layout of the instance's
+      field array; LOAD_ATTR / STORE_ATTR resolve field names through
+      this table at load time and cache the numeric index.
+
+================================================================================
+6. GLOBAL VARIABLES TABLE
+================================================================================
+
+Lists all top-level global variables declared in the module.
+
+  Size      Type    Description
+  ──────    ──────  ──────────────────────────────────────────────────────
+  4 bytes   u32     GLOBAL_COUNT : Number of global variables.
+
+  [REPEAT GLOBAL_COUNT TIMES]:
+    4 bytes   u32     NAME_INDEX : Constant Pool index (NAME) of the variable.
+
+  Notes:
+    - The i-th entry in GLOBAL_TABLE corresponds to global index i used by
+      the LOAD_GLOBAL / STORE_GLOBAL opcodes. Order is significant and MUST
+      match the order produced by the resolver (Program.globals).
+    - Global variables are initialized by executing the entry function
+      (Function Table index 0) at VM startup, in program order.
+    - Global function objects (declared with `function name ...`) also
+      appear here, so that CALL can load them by name via LOAD_GLOBAL.
+
+================================================================================
+7. BINARY LAYOUT EXAMPLE (HEX DUMP)
+================================================================================
+
+Below is a conceptual hex dump of a minimal .lbc file containing:
+- 1 Constant: the string "main" (NAME)
+- 1 Function: main() with 2 instructions (PUSH_INT 10, RETURN)
+- 0 Classes, 0 Globals
+
+  [HEADER]
+  4C 4F 4F 4D   # Magic: "LOOM"
+  01 00         # Version: 1.0
+  01            # Flags: Debug Info Present
+  00 00 00 00   # Entry Point: Function Index 0
+  00 00 00 00 00# Reserved
+
+  [CONSTANT POOL]
+  00 00 00 01   # Constant Count: 1
+  05            # Tag: NAME
+  00 00 00 04   # Length: 4
+  6D 61 69 6E   # Data: "main"
+
+  [FUNCTION TABLE]
+  00 00 00 01   # Function Count: 1
+  00 00 00 00   # Name Index: 0 ("main")
+  00            # Arity: 0
+  01            # Locals Count: 1
+  00 02         # Max Stack: 2
+  00 00         # Upvalues Count: 0
+  00 00 00 09   # Bytecode Length: 9 bytes
+  --- BYTECODE START ---
+  02            # Opcode: PUSH_INT
+  00 00 00 00
+  00 00 00 0A   # Operand: 10 (i64)
+  61            # Opcode: RETURN
+  --- BYTECODE END ---
+  00 00 00 01   # Line Table Count: 1
+  00 00 00 00   # Offset: 0
+  00 00 00 01   # Source Line: 1
+
+  [CLASS TABLE]
+  00 00 00 00   # Class Count: 0
+
+  [GLOBAL TABLE]
+  00 00 00 00   # Global Count: 0
+
+================================================================================
+8. NOTES ON CURRENT IMPLEMENTATION (v1.0)
+================================================================================
+
+The following conventions describe how the current LOOM compiler and the
+LVM interact with this file format. They do NOT change the binary layout;
+they clarify semantics.
+
+  8.1 ENTRY FUNCTION
+      Index 0 in the Function Table is the module init function.
+      It contains all top-level statements (variable declarations,
+      expression statements, function-object creation, etc.).
+      The VM executes it once at module load.
+      A user-declared `main()` is NOT special in the file format:
+      if present, the compiler emits a CALL to it at the end of the
+      init function body.
+
+  8.2 FUNCTION REFERENCES IN BYTECODE
+      LOAD_GLOBAL / STORE_GLOBAL use the GLOBAL_TABLE index directly.
+      Functions are not a separate tag in the constant pool. To call a
+      global function `foo`, the compiler emits:
+          LOAD_GLOBAL  <idx_of_foo>
+          <push args...>
+          CALL         <argc>
+      For local functions and closures, the compiler emits
+      MAKE_CLOSURE / MAKE_LAMBDA with a NAME pool index; the VM resolves
+      the name through the Function Table.
+
+  8.3 UPValueS
+      Upvalue descriptors are emitted per function, immediately after its
+      bytecode. They are read once at module load time and cached with
+      the function object.
+
+  8.4 LINE NUMBERS
+      In v1.0 the compiler always emits the LINE_NUMBER_TABLE. The VM may
+      ignore it, but tooling (disassembler, debugger) uses it.
+      Offsets are byte offsets into the BYTECODE array, ascending.
+
+  8.5 MAX_STACK
+      In v1.0 MAX_STACK is written as 0. The VM is expected to allocate
+      a fixed-size operand stack per frame and to raise a stack-overflow
+      error if exceeded. A future compiler version may compute exact
+      stack depth and write a non-zero value.
+
+  8.6 ENDIANNESS
+      All multi-byte values are big-endian. The VM reads them with
+      explicit byte-by-byte shifts; it does NOT rely on host endianness.
+
+  8.7 VERSION COMPATIBILITY
+      - Major mismatch: VM MUST refuse to load the file.
+      - Minor mismatch: VM SHOULD warn but continue.
+      - Unknown FLAGS bits MUST be ignored.
+
+================================================================================
+END OF SPECIFICATION
+================================================================================

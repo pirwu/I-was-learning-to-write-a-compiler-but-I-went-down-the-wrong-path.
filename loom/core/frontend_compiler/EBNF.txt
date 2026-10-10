@@ -1,0 +1,360 @@
+================================================================================
+               EBNF GRAMMAR FOR THE LOOM PROGRAMMING LANGUAGE
+================================================================================
+
+NOTES:
+- Strict typing: every variable, parameter, and return value must have a type.
+- Blocks are delimited by { } (C/JS/Rust style).
+- END* keywords (ENDIF, ENDWHILE, etc.) are OPTIONAL terminators that can be
+  used as alternatives to braces for single-statement constructs.
+- Only tokens present in TokensLOOM.py are used.
+- console and input are keywords (not identifiers); console is used as a
+  namespace-like object (e.g. console.write(...)), input is a keyword for I/O.
+
+================================================================================
+1. LEXICAL ELEMENTS
+================================================================================
+
+(* Whitespace and comments are ignored *)
+ignored         = WS | LINE_COMMENT | BLOCK_COMMENT ;
+
+(* Identifiers *)
+identifier      = ID ;
+
+(* Literals *)
+literal         = LITERAL_INT | LITERAL_DOUBLE | LITERAL_STR | LITERAL_CHAR
+                | TRUE | FALSE ;
+
+================================================================================
+2. PROGRAM STRUCTURE AND MODULES
+================================================================================
+
+program         = { top_level_item } ;
+
+top_level_item  = package_decl | import_stmt | export_stmt | declaration
+                | statement ;
+
+package_decl    = PACKAGE identifier SEMICOLON ;
+
+import_stmt     = IMPORT module_path [ AS identifier ] SEMICOLON
+                | FROM module_path IMPORT ( identifier | MUL ) [ AS identifier ] SEMICOLON ;
+
+export_stmt     = EXPORT ( declaration | identifier ) SEMICOLON ;
+
+module_path     = identifier { DOUBLE_COLON identifier } ;
+
+declaration     = var_decl | func_decl | class_decl | struct_decl
+                | interface_decl | record_decl | module_decl | namespace_decl
+                | thread_decl | process_decl | coroutine_decl ;
+
+module_decl     = MODULE identifier block ;
+namespace_decl  = NAMESPACE identifier block ;
+
+================================================================================
+3. VARIABLE DECLARATIONS AND TYPES (STRICT TYPING)
+================================================================================
+
+var_decl        = ( VAR | CONST ) identifier COLON type [ ASSIGN expression ] SEMICOLON ;
+
+type            = base_type [ QUESTION ]
+                | array_type
+                | function_type
+                | generic_type ;
+
+base_type       = INT | DOUBLE | STR | CHAR | BOOL | VOID | identifier ;
+
+array_type      = base_type LBRACKET [ expression ] RBRACKET ;
+
+function_type   = FUNCTION LPAREN [ type_list ] RPAREN [ ARROW type ] ;
+
+generic_type    = identifier LT type_list GT ;
+
+type_list       = type { COMMA type } ;
+
+================================================================================
+4. STATEMENTS AND CONTROL FLOW
+================================================================================
+
+block           = LBRACE { statement } RBRACE ;
+
+statement       = var_decl
+                | assignment
+                | if_stmt
+                | while_stmt
+                | do_while_stmt
+                | for_stmt
+                | switch_stmt
+                | match_stmt
+                | try_stmt
+                | return_stmt
+                | yield_stmt
+                | break_stmt
+                | continue_stmt
+                | goto_stmt
+                | assert_stmt
+                | raise_stmt
+                | throw_stmt
+                | async_stmt
+                | lock_stmt
+                | sync_block
+                | expr_stmt
+                | block
+                | empty_stmt ;
+
+empty_stmt      = SEMICOLON ;
+expr_stmt       = expression SEMICOLON ;
+
+(* Branching *)
+if_stmt         = IF LPAREN expression RPAREN block
+                  { ELSEIF LPAREN expression RPAREN block }
+                  [ ELSE block ] [ ENDIF ] ;
+
+switch_stmt     = SWITCH LPAREN expression RPAREN LBRACE
+                  { case_clause } [ default_clause ] RBRACE [ ENDSWITCH ] ;
+case_clause     = CASE expression COLON { statement } ;
+default_clause  = DEFAULT COLON { statement } ;
+
+match_stmt      = MATCH expression LBRACE { match_arm } RBRACE [ ENDMATCH ] ;
+match_arm       = WHEN pattern [ IF expression ] ARROW_FAT ( expression | block ) COMMA? ;
+
+(* Loops *)
+while_stmt      = WHILE LPAREN expression RPAREN block [ ENDWHILE ] ;
+
+do_while_stmt   = DO block WHILE LPAREN expression RPAREN SEMICOLON [ ENDDO ] ;
+
+for_stmt        = FOR LPAREN identifier ( IN | OF ) for_iterable RPAREN block [ ENDFOR ]
+                | FOR LPAREN var_decl expression SEMICOLON expression RPAREN block [ ENDFOR ] ;
+
+for_iterable    = range_expr
+                | enumerate_expr
+                | zip_expr
+                | reversed_expr
+                | expression ;
+
+range_expr      = RANGE LPAREN expression [ COMMA expression ] [ COMMA expression ] RPAREN
+                | expression ( RANGE_DOTS | RANGE_DOTS_EQ ) expression ;
+
+enumerate_expr  = ENUMERATE LPAREN expression RPAREN ;
+zip_expr        = ZIP LPAREN expression_list RPAREN ;
+reversed_expr   = REVERSED LPAREN expression RPAREN ;
+
+(* Error handling *)
+try_stmt        = TRY block { except_clause } [ FINALLY block ] [ ENDTRY ] ;
+except_clause   = EXCEPT [ identifier [ AS identifier ] ] block ;
+
+(* Jumps and returns *)
+return_stmt     = RETURN [ expression ] SEMICOLON ;
+yield_stmt      = YIELD [ expression ] SEMICOLON ;
+break_stmt      = BREAK SEMICOLON ;
+continue_stmt   = CONTINUE SEMICOLON ;
+goto_stmt       = GOTO identifier SEMICOLON ;
+assert_stmt     = ASSERT expression [ COLON expression ] SEMICOLON ;
+raise_stmt      = RAISE expression SEMICOLON ;
+throw_stmt      = THROW expression SEMICOLON ;
+
+================================================================================
+5. FUNCTIONS AND LAMBDAS
+================================================================================
+
+func_decl       = { decorator } [ ASYNC ] [ STATIC ] FUNCTION identifier
+                  LPAREN [ param_list ] RPAREN [ ARROW type ] block [ ENDFUNCTION ] ;
+
+lambda_expr     = LAMBDA LPAREN [ param_list ] RPAREN [ ARROW type ] ARROW_FAT
+                  ( expression | block ) ;
+
+param_list      = param { COMMA param } ;
+param           = identifier COLON type [ ASSIGN expression ] ;
+
+(* Functional built-ins *)
+func_builtin    = ( MAP | FILTER | REDUCE ) LPAREN expression COMMA expression RPAREN ;
+
+================================================================================
+6. OOP: CLASSES, INTERFACES, STRUCTS, RECORDS
+================================================================================
+
+class_decl      = { decorator } [ ABSTRACT ] CLASS identifier
+                  [ EXTENDS type ] [ IMPLEMENTS type_list ]
+                  LBRACE { class_member } RBRACE [ ENDCLASS ] ;
+
+interface_decl  = INTERFACE identifier LBRACE { interface_member } RBRACE ;
+
+struct_decl     = STRUCT identifier LBRACE { struct_member } RBRACE [ ENDSTRUCT ] ;
+record_decl     = RECORD identifier LPAREN [ param_list ] RPAREN ;
+
+class_member    = { access_modifier } [ STATIC ] [ OVERRIDE ]
+                  ( var_decl | func_decl | constructor_decl | destructor_decl ) ;
+interface_member= func_decl | var_decl ;
+struct_member   = { access_modifier } var_decl ;
+
+access_modifier = PUBLIC | PRIVATE | PROTECTED ;
+
+constructor_decl= CONSTRUCTOR LPAREN [ param_list ] RPAREN block ;
+destructor_decl = DESTRUCTOR LPAREN RPAREN block ;
+
+================================================================================
+7. CONCURRENCY AND SYNCHRONIZATION
+================================================================================
+
+async_stmt      = ASYNC block ;
+await_expr      = AWAIT expression ;
+
+thread_decl     = THREAD identifier LPAREN [ param_list ] RPAREN block ;
+process_decl    = PROCESS identifier LPAREN [ param_list ] RPAREN block ;
+coroutine_decl  = COROUTINE identifier LPAREN [ param_list ] RPAREN block ;
+
+sync_block      = SYNC block ;
+mutex_decl      = MUTEX identifier ;
+semaphore_decl  = SEMAPHORE identifier [ ASSIGN expression ] ;
+lock_stmt       = LOCK expression block ;
+
+================================================================================
+8. EXPRESSIONS (ORDERED BY INCREASING PRECEDENCE)
+================================================================================
+
+expression      = assignment_expr ;
+
+(* Assignment is right-associative, lowest precedence *)
+assignment_expr = postfix assign_op expression
+                | ternary ;
+
+assign_op       = ASSIGN | PLUS_EQ | MINUS_EQ | MUL_EQ | DIV_EQ | MOD_EQ
+                | POW_EQ | IDIV_EQ | AND_EQ | OR_EQ | XOR_EQ
+                | LSHIFT_EQ | RSHIFT_EQ ;
+
+(* Ternary (C/JS style) *)
+ternary         = logic_or [ QUESTION expression COLON expression ] ;
+
+logic_or        = logic_and { OR logic_and } ;
+logic_and       = bitwise_or { AND bitwise_or } ;
+bitwise_or      = bitwise_xor { BIT_OR bitwise_xor } ;
+bitwise_xor     = bitwise_and { BIT_XOR bitwise_and } ;
+bitwise_and     = equality { BIT_AND equality } ;
+
+equality        = comparison { ( EQ | NEQ ) comparison } ;
+comparison      = range_expr_top { ( LT | GT | LE | GE ) range_expr_top } ;
+
+(* Top-level range (for expressions like 1..10) *)
+range_expr_top  = shift [ ( RANGE_DOTS | RANGE_DOTS_EQ ) shift ] ;
+
+shift           = additive { ( LSHIFT | RSHIFT ) additive } ;
+additive        = multiplicative { ( PLUS | MINUS ) multiplicative } ;
+multiplicative  = power { ( MUL | DIV | IDIV | MOD ) power } ;
+power           = unary [ POW unary ] ;
+
+unary           = ( MINUS | NOT | BIT_NOT | INC | DEC | await_expr ) unary
+                | postfix ;
+
+postfix         = primary { postfix_op } ;
+postfix_op      = call | index | member | inc_dec ;
+
+call            = LPAREN [ arg_list ] RPAREN ;
+index           = LBRACKET expression RBRACKET ;
+member          = DOT identifier | DOUBLE_COLON identifier ;
+inc_dec         = INC | DEC ;
+
+(* Assignment as a statement (uses postfix on the left) *)
+assignment      = postfix assign_op expression SEMICOLON ;
+
+================================================================================
+9. PRIMARY EXPRESSIONS AND LITERALS
+================================================================================
+
+primary         = literal
+                | identifier
+                | LPAREN expression RPAREN
+                | array_literal
+                | dict_literal
+                | lambda_expr
+                | new_expr
+                | console_expr
+                | input_expr
+                | func_builtin
+                | this_expr
+                | super_expr ;
+
+array_literal   = LBRACKET [ expression { COMMA expression } ] RBRACKET ;
+dict_literal    = LBRACE [ dict_entry { COMMA dict_entry } ] RBRACE ;
+dict_entry      = expression COLON expression ;
+
+new_expr        = NEW identifier LPAREN [ arg_list ] RPAREN ;
+
+(* console is a keyword used as a namespace-like object *)
+console_expr    = CONSOLE DOT identifier LPAREN [ arg_list ] RPAREN ;
+
+(* input is a keyword for reading input *)
+input_expr      = INPUT LPAREN [ expression ] RPAREN ;
+
+this_expr       = THIS | SELF ;
+super_expr      = SUPER [ DOT identifier ] ;
+
+arg_list        = expression { COMMA expression } ;
+expression_list = expression { COMMA expression } ;
+
+================================================================================
+10. PATTERNS (FOR MATCH) AND DECORATORS
+================================================================================
+
+pattern         = literal
+                | identifier
+                | UNDERSCORE
+                | pattern BIT_OR pattern
+                | identifier LPAREN [ pattern_list ] RPAREN ;
+
+pattern_list    = pattern { COMMA pattern } ;
+
+(* UNDERSCORE is parsed as ID with value "_" and treated as wildcard *)
+UNDERSCORE      = identifier ; (* where identifier == "_" *)
+
+decorator       = AT identifier [ LPAREN [ arg_list ] RPAREN ] ;
+
+================================================================================
+EXAMPLES OF VALID LOOM CODE
+================================================================================
+
+1. Variable declaration with strict typing and a while loop (your example):
+
+   var x : int = 10;
+   var y : int = 0;
+   while (x > y) {
+       y += 1;
+   }
+
+2. Console output and input:
+
+   console.write("Enter your name: ");
+   var name : str = input();
+   console.write("Hello, " + name);
+
+3. Pattern matching:
+
+   match value {
+       when 1       => console.write("One"),
+       when x if x > 10 => console.write("Big"),
+       when _       => console.write("Other")
+   }
+
+4. Functions and lambdas:
+
+   function add(a : int, b : int) -> int {
+       return a + b;
+   }
+   var lambda_fn : function(int, int) -> int = lambda (x : int, y : int) -> x + y;
+
+5. Ranges and for-loops:
+
+   for (i in 1..10) {
+       console.write(i);
+   }
+   for (i in range(10, 0, -1)) { ... }
+   for (item of collection) { ... }
+
+6. Classes:
+
+   class Animal {
+       public name : str;
+       public constructor(n : str) {
+           this.name = n;
+       }
+   }
+
+================================================================================

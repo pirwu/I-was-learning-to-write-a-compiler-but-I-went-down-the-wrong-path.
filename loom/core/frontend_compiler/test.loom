@@ -1,0 +1,38 @@
+﻿class Animal {
+    public var name : str;
+
+    constructor(n : str) {
+        this.name = n;
+    }
+
+    public function speak() -> void {
+        console.write(this.name);
+    }
+}
+
+class Dog extends Animal {
+    constructor(n : str) {
+        this.name = n;
+    }
+
+    public override function speak() -> void {
+        super.speak();
+        console.write(" (woof)");
+    }
+}
+
+interface Pet {
+    function petName() -> str;
+}
+
+struct Point {
+    public var x : int;
+    public var y : int;
+}
+
+record Pair(a : int, b : int);
+
+var d : Dog = new Dog("Rex");
+d.speak();
+var p : Point = new Point();
+var rec : Pair = new Pair(1, 2);

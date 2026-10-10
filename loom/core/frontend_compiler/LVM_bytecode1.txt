@@ -1,0 +1,664 @@
+================================================================================
+          LOOM VIRTUAL MACHINE (LVM) — BYTECODE SPECIFICATION v1.0
+================================================================================
+
+1. ARCHITECTURE OVERVIEW
+================================================================================
+
+The LVM is a stack-based virtual machine with strict runtime type enforcement.
+
+Memory regions:
+  - Operand Stack:   temporary values during expression evaluation
+  - Call Stack:      function frames (local variables + return address)
+  - Heap:            objects, arrays, strings, closures, iterators
+  - Constant Pool:   literals, class references, function references, strings
+  - Global Table:    global variables indexed by u16
+
+Value representation (tagged union, 16 bytes aligned):
+  +-----------+---------------------------+
+  | tag (u8)  | payload (u64 / f64 / ptr) |
+  +-----------+---------------------------+
+  Tags: 0=INT  1=DOUBLE  2=STR  3=CHAR  4=BOOL
+        5=OBJ  6=ARRAY  7=DICT  8=FUNC  9=CLOSURE
+        10=ITER 11=NULL 12=VOID 13=TYPE 14=RANGE
+
+Instruction format:
+  [ OPCODE : u8 ] [ OPERAND : 0 | 1 | 2 | 4 | 8 bytes ]
+
+Operand size suffixes in this document:
+  _u8   = 1 byte unsigned   (local index, arg count, flags)
+  _u16  = 2 bytes unsigned  (constant pool index, jump offset)
+  _i16  = 2 bytes signed    (relative jump offset)
+  _u32  = 4 bytes unsigned  (global index, large offset)
+  _i64  = 8 bytes signed    (inline integer literal)
+  _f64  = 8 bytes float     (inline double literal)
+
+
+2. COMPLETE OPCODE TABLE
+================================================================================
+
+------------------------------------------------------------------------
+2.1  STACK OPERATIONS  (0x00 – 0x0F)
+------------------------------------------------------------------------
+  0x00  NOP                         no operation
+  0x01  PUSH_CONST      _u16        push constant pool[index]
+  0x02  PUSH_INT        _i64        push inline 64-bit integer
+  0x03  PUSH_DOUBLE     _f64        push inline 64-bit float
+  0x04  PUSH_STR        _u16        push string from constant pool
+  0x05  PUSH_CHAR       _u8         push single character (ASCII/UTF-8 code)
+  0x06  PUSH_TRUE                   push bool true
+  0x07  PUSH_FALSE                  push bool false
+  0x08  PUSH_NULL                   push null value
+  0x09  POP                         discard top of stack
+  0x0A  DUP                         duplicate top of stack
+  0x0B  DUP2                        duplicate top two values
+  0x0C  SWAP                        swap top two values
+  0x0D  ROT3                        rotate top three: [a b c] -> [b c a]
+  0x0E  OVER                        copy second value to top: [a b] -> [a b a]
+  0x0F  POP_N           _u8         pop N values from stack
+
+------------------------------------------------------------------------
+2.2  VARIABLE LOAD / STORE  (0x10 – 0x1F)
+------------------------------------------------------------------------
+  0x10  LOAD_LOCAL      _u8         push local[index]
+  0x11  STORE_LOCAL     _u8         pop into local[index]
+  0x12  LOAD_GLOBAL     _u16        push global[index]
+  0x13  STORE_GLOBAL    _u16        pop into global[index]
+  0x14  LOAD_UPVALUE    _u16        push closure upvalue[index]
+  0x15  STORE_UPVALUE   _u16        pop into closure upvalue[index]
+  0x16  LOAD_ATTR       _u16        pop obj, push obj.attr (name from pool)
+  0x17  STORE_ATTR      _u16        pop val, pop obj, obj.attr = val
+  0x18  LOAD_INDEX                  pop idx, pop arr, push arr[idx]
+  0x19  STORE_INDEX                 pop val, pop idx, pop arr, arr[idx] = val
+  0x1A  LOAD_SELF                   push current this/self reference
+  0x1B  LOAD_SUPER                  push super reference for method dispatch
+  0x1C  LOAD_MODULE     _u16        push module object by pool index
+  0x1D  LOAD_NAMESPACE  _u16        push namespace object (for :: resolution)
+  0x1E  DECLARE_VAR     _u16        declare typed variable (name + type in pool)
+  0x1F  DECLARE_CONST   _u16        declare immutable typed constant
+
+------------------------------------------------------------------------
+2.3  ARITHMETIC  (0x20 – 0x2F)
+------------------------------------------------------------------------
+  All binary ops: pop b, pop a, push (a op b).
+  Runtime type check enforced (strict typing).
+
+  0x20  ADD                         a + b   (int+int, double+double, str+str)
+  0x21  SUB                         a - b
+  0x22  MUL                         a * b
+  0x23  DIV                         a / b   (floating-point division)
+  0x24  IDIV                        a // b  (integer floor division)
+  0x25  MOD                         a % b   (modulo / remainder)
+  0x26  POW                         a ** b  (exponentiation)
+  0x27  NEG                         -a      (unary negate)
+  0x28  INC_LOCAL       _u8         local[index]++  (post-increment shortcut)
+  0x29  DEC_LOCAL       _u8         local[index]--  (post-decrement shortcut)
+  0x2A  INC_OP                      pop a, push a+1  (prefix ++a)
+  0x2B  DEC_OP                      pop a, push a-1  (prefix --a)
+  0x2C  CONCAT                      string concatenation (str + str)
+  0x2D  (reserved)
+  0x2E  (reserved)
+  0x2F  (reserved)
+
+------------------------------------------------------------------------
+2.4  BITWISE & SHIFT  (0x30 – 0x3F)
+------------------------------------------------------------------------
+  0x30  BIT_AND                     a & b
+  0x31  BIT_OR                      a | b
+  0x32  BIT_XOR                     a ^ b
+  0x33  BIT_NOT                     ~a      (unary bitwise complement)
+  0x34  LSHIFT                      a << b
+  0x35  RSHIFT                      a >> b
+  0x36  (reserved)
+  0x37  (reserved)
+  0x38  (reserved)
+  0x39  (reserved)
+  0x3A  (reserved)
+  0x3B  (reserved)
+  0x3C  (reserved)
+  0x3D  (reserved)
+  0x3E  (reserved)
+  0x3F  (reserved)
+
+------------------------------------------------------------------------
+2.5  COMPARISON & LOGIC  (0x40 – 0x4F)
+------------------------------------------------------------------------
+  0x40  CMP_EQ                      a == b  → bool
+  0x41  CMP_NEQ                     a != b  → bool
+  0x42  CMP_LT                      a < b   → bool
+  0x43  CMP_GT                      a > b   → bool
+  0x44  CMP_LE                      a <= b  → bool
+  0x45  CMP_GE                      a >= b  → bool
+  0x46  LOGIC_AND                   a && b  (short-circuit, see JUMP_IF_FALSE)
+  0x47  LOGIC_OR                    a || b  (short-circuit, see JUMP_IF_TRUE)
+  0x48  LOGIC_NOT                   !a      → bool
+  0x49  CMP_IS                      a is b  (identity / reference equality)
+  0x4A  INSTANCE_OF     _u16        pop obj, push (obj instanceof Type)
+  0x4B  TYPE_CHECK      _u16        runtime strict type assertion (throws on fail)
+  0x4C  TYPEOF                      pop val, push type tag as int
+  0x4D  (reserved)
+  0x4E  (reserved)
+  0x4F  (reserved)
+
+------------------------------------------------------------------------
+2.6  CONTROL FLOW — JUMPS  (0x50 – 0x5F)
+------------------------------------------------------------------------
+  All jump offsets are signed 16-bit relative to the next instruction.
+
+  0x50  JUMP            _i16        unconditional jump
+  0x51  JUMP_IF_TRUE    _i16        pop val; jump if val == true
+  0x52  JUMP_IF_FALSE   _i16        pop val; jump if val == false
+  0x53  JUMP_IF_NULL    _i16        pop val; jump if val == null
+  0x54  JUMP_IF_NOT_NULL _i16       pop val; jump if val != null
+  0x55  SETUP_LOOP      _i16        mark loop start (for break/continue)
+  0x56  POP_LOOP                    end loop scope
+  0x57  BREAK                       jump to end of innermost loop
+  0x58  CONTINUE                    jump to start of innermost loop
+  0x59  GOTO            _u16        absolute jump to label address (pool)
+  0x5A  (reserved)
+  0x5B  (reserved)
+  0x5C  (reserved)
+  0x5D  (reserved)
+  0x5E  (reserved)
+  0x5F  (reserved)
+
+------------------------------------------------------------------------
+2.7  CONTROL FLOW — CALLS & RETURNS  (0x60 – 0x6F)
+------------------------------------------------------------------------
+  0x60  CALL            _u8         call function on stack with N args
+  0x61  CALL_METHOD     _u16 _u8    call obj.method (name from pool) with N args
+  0x62  CALL_STATIC     _u16 _u8    call Class::method with N args
+  0x63  CALL_SUPER      _u16 _u8    call super.method with N args
+  0x64  RETURN                      return top of stack to caller
+  0x65  RETURN_VOID                 return void (no value)
+  0x66  YIELD                       yield top of stack (generator/coroutine)
+  0x67  YIELD_FROM                  delegate to sub-generator
+  0x68  TAIL_CALL       _u8         tail-call optimization (replace frame)
+  0x69  (reserved)
+  0x6A  (reserved)
+  0x6B  (reserved)
+  0x6C  (reserved)
+  0x6D  (reserved)
+  0x6E  (reserved)
+  0x6F  (reserved)
+
+------------------------------------------------------------------------
+2.8  OBJECTS & OOP  (0x70 – 0x8F)
+------------------------------------------------------------------------
+  0x70  NEW_OBJECT      _u16        allocate instance of class (pool index)
+  0x71  NEW_ARRAY       _u16        pop N elements, create typed array
+  0x72  NEW_DICT        _u16        pop N key-value pairs, create dict
+  0x73  NEW_STRUCT      _u16        allocate struct instance (pool index)
+  0x74  NEW_RECORD      _u16        allocate record instance (pool index)
+  0x75  DEFINE_CLASS    _u16        define class (name from pool, metadata follows)
+  0x76  DEFINE_METHOD   _u16 _u16   attach method to class (name, func_ref)
+  0x77  DEFINE_FIELD    _u16 _u16   define class field (name, type from pool)
+  0x78  DEFINE_INTERFACE _u16       define interface (pool index)
+  0x79  IMPLEMENT_IFACE _u16 _u16   class implements interface
+  0x7A  EXTENDS_CLASS   _u16 _u16   child extends parent (both from pool)
+  0x7B  INVOKE_CTOR     _u8         invoke constructor with N args
+  0x7C  INVOKE_DTOR                 invoke destructor on top-of-stack object
+  0x7D  SET_ACCESS      _u8         set access modifier (0=public,1=private,2=protected)
+  0x7E  SET_STATIC                  mark next definition as static
+  0x7F  SET_ABSTRACT                mark next definition as abstract
+  0x80  SET_OVERRIDE                mark next method as override
+  0x81  CAST            _u16        strict cast to type (pool index), throws on fail
+  0x82  UNBOX           _u8         unbox primitive from object wrapper
+  0x83  BOX             _u8         box primitive into object wrapper
+  0x84  (reserved)
+  0x85  (reserved)
+  0x86  (reserved)
+  0x87  (reserved)
+  0x88  (reserved)
+  0x89  (reserved)
+  0x8A  (reserved)
+  0x8B  (reserved)
+  0x8C  (reserved)
+  0x8D  (reserved)
+  0x8E  (reserved)
+  0x8F  (reserved)
+
+------------------------------------------------------------------------
+2.9  ITERATORS & RANGES  (0x90 – 0x9F)
+------------------------------------------------------------------------
+  0x90  BUILD_RANGE     _u8         pop start, end [, step]; flags: 0=exclusive
+  0x91  BUILD_RANGE_INCL _u8        pop start, end [, step]; flags: 0=inclusive (..=)
+  0x92  GET_ITER                    pop iterable, push iterator object
+  0x93  ITER_NEXT       _i16        advance iterator; jump if exhausted
+  0x94  ITER_CLOSE                  close/dispose iterator
+  0x95  BUILD_ENUMERATE             pop iterable, push enumerate iterator
+  0x96  BUILD_ZIP       _u8         pop N iterables, push zip iterator
+  0x97  BUILD_REVERSED              pop iterable, push reversed iterator
+  0x98  UNPACK          _u8         unpack top iterable into N stack values
+  0x99  (reserved)
+  0x9A  (reserved)
+  0x9B  (reserved)
+  0x9C  (reserved)
+  0x9D  (reserved)
+  0x9E  (reserved)
+  0x9F  (reserved)
+
+------------------------------------------------------------------------
+2.10  I/O & BUILT-INS  (0xA0 – 0xAF)
+------------------------------------------------------------------------
+  0xA0  CONSOLE_WRITE               pop value, write to stdout (no newline)
+  0xA1  CONSOLE_WRITELN             pop value, write to stdout with newline
+  0xA2  INPUT_READ      _u8         push input() result; arg=0 no prompt, 1 pop prompt str
+  0xA3  MAP_CALL        _u8         pop iterable, pop func; push mapped result
+  0xA4  FILTER_CALL     _u8         pop iterable, pop func; push filtered result
+  0xA5  REDUCE_CALL     _u8         pop iterable, pop init, pop func; push result
+  0xA6  ASSERT_CHECK                pop cond [, pop msg]; throw if false
+  0xA7  PRINT_FMT       _u8         formatted print (pop N args + format string)
+  0xA8  (reserved)
+  0xA9  (reserved)
+  0xAA  (reserved)
+  0xAB  (reserved)
+  0xAC  (reserved)
+  0xAD  (reserved)
+  0xAE  (reserved)
+  0xAF  (reserved)
+
+------------------------------------------------------------------------
+2.11  ERROR HANDLING  (0xB0 – 0xBF)
+------------------------------------------------------------------------
+  0xB0  SETUP_TRY       _i16        set exception handler at offset
+  0xB1  POP_TRY                     remove current try handler
+  0xB2  THROW                       pop exception object, throw it
+  0xB3  RAISE           _u16        raise exception by type (pool index)
+  0xB4  SETUP_EXCEPT    _i16        begin except block at offset
+  0xB5  POP_EXCEPT                  end except block
+  0xB6  SETUP_FINALLY   _i16        begin finally block at offset
+  0xB7  POP_FINALLY                 end finally block
+  0xB8  PUSH_EXCEPTION              push current exception object onto stack
+  0xB9  MATCH_EXCEPTION _u16        check if exception matches type (pool)
+  0xBA  (reserved)
+  0xBB  (reserved)
+  0xBC  (reserved)
+  0xBD  (reserved)
+  0xBE  (reserved)
+  0xBF  (reserved)
+
+------------------------------------------------------------------------
+2.12  CONCURRENCY  (0xC0 – 0xCF)
+------------------------------------------------------------------------
+  0xC0  SPAWN_THREAD    _u8         pop func + N args, spawn OS thread
+  0xC1  SPAWN_PROCESS   _u8         pop func + N args, spawn process
+  0xC2  SPAWN_COROUTINE _u8         pop func + N args, spawn coroutine (cooperative)
+  0xC3  AWAIT                       suspend current task, await top-of-stack future
+  0xC4  ASYNC_ENTER                 mark beginning of async block
+  0xC5  ASYNC_EXIT                  mark end of async block
+  0xC6  MUTEX_CREATE    _u16        create mutex (store in global/local by index)
+  0xC7  MUTEX_LOCK                  pop mutex, acquire lock (blocking)
+  0xC8  MUTEX_UNLOCK                pop mutex, release lock
+  0xC9  SEMAPHORE_CREATE _u16 _u8   create semaphore with initial count
+  0xCA  SEMAPHORE_ACQUIRE           pop semaphore, acquire
+  0xCB  SEMAPHORE_RELEASE           pop semaphore, release
+  0xCC  SYNC_ENTER                  enter synchronized block (pop lock obj)
+  0xCD  SYNC_EXIT                   exit synchronized block
+  0xCE  LOCK_ENTER                  enter lock block (pop mutex/lock obj)
+  0xCF  LOCK_EXIT                   exit lock block
+
+------------------------------------------------------------------------
+2.13  MODULES & NAMESPACES  (0xD0 – 0xDF)
+------------------------------------------------------------------------
+  0xD0  IMPORT_MODULE   _u16        load module by name (pool index)
+  0xD1  IMPORT_FROM     _u16 _u16   from module import symbol (mod, sym in pool)
+  0xD2  IMPORT_ALL      _u16        from module import * (wildcard)
+  0xD3  IMPORT_AS       _u16 _u16   import module as alias (mod, alias in pool)
+  0xD4  EXPORT_SYMBOL   _u16        export symbol by name (pool index)
+  0xD5  LOAD_PACKAGE    _u16        load package (pool index)
+  0xD6  ENTER_NAMESPACE _u16        enter namespace scope
+  0xD7  EXIT_NAMESPACE              exit namespace scope
+  0xD8  RESOLVE_DCOLON  _u16        resolve A::B path (name from pool)
+  0xD9  (reserved)
+  0xDA  (reserved)
+  0xDB  (reserved)
+  0xDC  (reserved)
+  0xDD  (reserved)
+  0xDE  (reserved)
+  0xDF  (reserved)
+
+------------------------------------------------------------------------
+2.14  CLOSURES & FUNCTIONAL  (0xE0 – 0xEF)
+------------------------------------------------------------------------
+  0xE0  MAKE_CLOSURE    _u16 _u8    create closure (func_ref from pool, N upvalues)
+  0xE1  MAKE_LAMBDA     _u16 _u8    create lambda (func_ref, N captured vars)
+  0xE2  CAPTURE_LOCAL   _u8         capture local[index] as upvalue
+  0xE3  CAPTURE_UPVALUE _u16        capture parent upvalue[index]
+  0xE4  APPLY_DECORATOR _u16        apply decorator (func_ref from pool) to TOS
+  0xE5  (reserved)
+  0xE6  (reserved)
+  0xE7  (reserved)
+  0xE8  (reserved)
+  0xE9  (reserved)
+  0xEA  (reserved)
+  0xEB  (reserved)
+  0xEC  (reserved)
+  0xED  (reserved)
+  0xEE  (reserved)
+  0xEF  (reserved)
+
+------------------------------------------------------------------------
+2.15  PATTERN MATCHING  (0xF0 – 0xF5)
+------------------------------------------------------------------------
+  0xF0  MATCH_START                 begin match block (pop subject, keep on stack)
+  0xF1  MATCH_LITERAL   _u16        compare TOS with literal (pool); push bool
+  0xF2  MATCH_BIND      _u8         bind TOS to local[index] (wildcard / capture)
+  0xF3  MATCH_GUARD     _i16        evaluate guard condition; jump if false
+  0xF4  MATCH_END                   end match block, pop subject
+  0xF5  MATCH_DESTRUCT  _u8         destructuring match (N fields)
+
+------------------------------------------------------------------------
+2.16  SPECIAL / DEBUG  (0xF6 – 0xFF)
+------------------------------------------------------------------------
+  0xF6  HALT                        stop VM execution
+  0xF7  LINE_INFO       _u32        source line number (for stack traces)
+  0xF8  DEBUG_BREAK                 debugger breakpoint
+  0xF9  META            _u16        metadata / pragma (pool index)
+  0xFA  (reserved)
+  0xFB  (reserved)
+  0xFC  (reserved)
+  0xFD  (reserved)
+  0xFE  (reserved)
+  0xFF  (reserved)
+
+
+3. CONSTANT POOL FORMAT
+================================================================================
+
+The constant pool is an array of tagged entries stored at the beginning of
+each compiled module / function object.
+
+  Entry format:
+    [ tag : u8 ] [ length : u32 ] [ data : length bytes ]
+
+  Tags:
+    0x01  INT_CONST       data = i64
+    0x02  DOUBLE_CONST    data = f64
+    0x03  STR_CONST       data = UTF-8 bytes
+    0x04  CHAR_CONST      data = u32 (Unicode codepoint)
+    0x05  FUNC_REF        data = u32 (bytecode offset)
+    0x06  CLASS_REF       data = u32 (class descriptor offset)
+    0x07  TYPE_DESC       data = type descriptor bytes
+    0x08  MODULE_NAME     data = UTF-8 bytes
+
+
+4. FUNCTION FRAME LAYOUT
+================================================================================
+
+  +----------------------------+
+  | return address (u64)       |
+  | previous frame pointer     |
+  | local[0]  (LoomValue)      |  ← first parameter
+  | local[1]  (LoomValue)      |
+  | ...                        |
+  | local[N]  (LoomValue)      |  ← last local variable
+  +----------------------------+
+  | operand stack grows up →   |
+  +----------------------------+
+
+
+5. COMPILATION EXAMPLES (LOOM SOURCE → BYTECODE)
+================================================================================
+
+------------------------------------------------------------------------
+Example 1: Variable declaration + while loop (strict typing)
+------------------------------------------------------------------------
+  Source:
+    var x : int = 10;
+    var y : int = 0;
+    while (x > y) {
+        y += 1;
+    }
+
+  Bytecode:
+    0000  LINE_INFO       1
+    0005  PUSH_INT        10
+    000E  STORE_LOCAL     0          # x = 10
+    0010  LINE_INFO       2
+    0015  PUSH_INT        0
+    001E  STORE_LOCAL     1          # y = 0
+    0020  LINE_INFO       3
+    0025  SETUP_LOOP      +22        # loop end at 0047
+    0028  LOAD_LOCAL      0          # push x
+    002A  LOAD_LOCAL      1          # push y
+    002C  CMP_GT                     # x > y
+    002D  JUMP_IF_FALSE   +18        # exit loop → 0047
+    0030  LINE_INFO       4
+    0035  LOAD_LOCAL      1          # push y
+    0037  PUSH_INT        1
+    0040  ADD                        # y + 1
+    0041  STORE_LOCAL     1          # y = y + 1
+    0043  JUMP            -18        # back to 0028
+    0046  POP_LOOP
+    0047  HALT
+
+------------------------------------------------------------------------
+Example 2: Console I/O
+------------------------------------------------------------------------
+  Source:
+    console.write("Name: ");
+    var n : str = input();
+    console.write(n);
+
+  Bytecode:
+    0000  PUSH_STR        0          # "Name: " from pool
+    0003  CONSOLE_WRITE
+    0004  INPUT_READ      0          # no prompt argument
+    0006  STORE_LOCAL     0          # n = input()
+    0008  LOAD_LOCAL      0          # push n
+    000A  CONSOLE_WRITE
+
+------------------------------------------------------------------------
+Example 3: Function with strict return type
+------------------------------------------------------------------------
+  Source:
+    function add(a : int, b : int) -> int {
+        return a + b;
+    }
+
+  Bytecode (function body, offset 0 inside func object):
+    0000  LOAD_LOCAL      0          # a
+    0002  LOAD_LOCAL      1          # b
+    0004  ADD
+    0005  TYPE_CHECK      1          # assert result is int (pool[1] = INT type)
+    0008  RETURN
+
+------------------------------------------------------------------------
+Example 4: For-loop with range (Rust-style ..)
+------------------------------------------------------------------------
+  Source:
+    for (i in 1..5) {
+        console.write(i);
+    }
+
+  Bytecode:
+    0000  PUSH_INT        1
+    0009  PUSH_INT        5
+    0012  BUILD_RANGE     0          # exclusive (..)
+    0014  GET_ITER
+    0015  SETUP_LOOP      +16        # loop end at 0031
+    0018  ITER_NEXT       +11        # if exhausted → 0031
+    001B  STORE_LOCAL     0          # i = next value
+    001D  LOAD_LOCAL      0
+    001F  CONSOLE_WRITELN
+    0020  JUMP            -8         # back to ITER_NEXT
+    0023  POP_LOOP
+    0024  ITER_CLOSE
+    0025  HALT
+
+------------------------------------------------------------------------
+Example 5: Match expression
+------------------------------------------------------------------------
+  Source:
+    match x {
+        when 1 => console.write("one"),
+        when _ => console.write("other")
+    }
+
+  Bytecode:
+    0000  MATCH_START                # keep x on stack
+    0001  DUP
+    0002  MATCH_LITERAL   0          # compare with 1 (pool[0])
+    0005  JUMP_IF_FALSE   +8         # skip to next arm
+    0008  PUSH_STR        1          # "one"
+    000B  CONSOLE_WRITE
+    000C  JUMP            +8         # skip to MATCH_END
+    000F  MATCH_BIND      0          # wildcard: bind to local 0 (or discard)
+    0011  PUSH_STR        2          # "other"
+    0014  CONSOLE_WRITE
+    0015  MATCH_END
+
+------------------------------------------------------------------------
+Example 6: Class definition + instantiation
+------------------------------------------------------------------------
+  Source:
+    class Animal {
+        public name : str;
+        constructor(n : str) {
+            this.name = n;
+        }
+    }
+    var a : Animal = new Animal("Cat");
+
+  Bytecode:
+    # --- class definition ---
+    0000  DEFINE_CLASS    0          # "Animal" from pool
+    0003  SET_ACCESS      0          # public
+    0005  DEFINE_FIELD    1 2        # field "name" : str
+    0009  DEFINE_METHOD   3 4        # method "constructor" → func_ref 4
+    # --- constructor body (separate func object) ---
+    0000  LOAD_SELF
+    0001  LOAD_LOCAL      0          # n
+    0003  STORE_ATTR      1          # this.name = n
+    0006  RETURN_VOID
+    # --- instantiation ---
+    000C  NEW_OBJECT      0          # allocate Animal
+    000F  PUSH_STR        5          # "Cat"
+    0012  INVOKE_CTOR     1          # call constructor with 1 arg
+    0014  STORE_LOCAL     0          # a = new Animal("Cat")
+
+------------------------------------------------------------------------
+Example 7: Try / Except / Finally
+------------------------------------------------------------------------
+  Source:
+    try {
+        var x : int = 10 // 0;
+    } except {
+        console.write("error");
+    } finally {
+        console.write("done");
+    }
+
+  Bytecode:
+    0000  SETUP_TRY       +14        # handler at 0014
+    0003  PUSH_INT        10
+    000C  PUSH_INT        0
+    0015  IDIV                       # 10 // 0  → throws DivisionByZero
+    0016  STORE_LOCAL     0
+    0018  POP_TRY
+    0019  JUMP            +8         # skip except → finally
+    # --- except ---
+    001C  POP_EXCEPT
+    001D  PUSH_STR        0          # "error"
+    0020  CONSOLE_WRITE
+    # --- finally ---
+    0021  SETUP_FINALLY   +6
+    0024  PUSH_STR        1          # "done"
+    0027  CONSOLE_WRITE
+    0028  POP_FINALLY
+
+------------------------------------------------------------------------
+Example 8: Lambda / Closure
+------------------------------------------------------------------------
+  Source:
+    var f : function(int) -> int = lambda (x : int) -> x * 2;
+
+  Bytecode:
+    0000  MAKE_LAMBDA     0 1        # func_ref 0, 1 upvalue captured
+    0003  STORE_LOCAL     0          # f = lambda
+
+  Lambda body (func_ref 0):
+    0000  LOAD_LOCAL      0          # x
+    0002  PUSH_INT        2
+    000B  MUL
+    000C  RETURN
+
+------------------------------------------------------------------------
+Example 9: Async / Await
+------------------------------------------------------------------------
+  Source:
+    async {
+        var r : str = await fetchData();
+        console.write(r);
+    }
+
+  Bytecode:
+    0000  ASYNC_ENTER
+    0001  LOAD_GLOBAL     0          # fetchData
+    0004  CALL            0          # fetchData()
+    0006  AWAIT                      # suspend until result ready
+    0007  STORE_LOCAL     0          # r = result
+    0009  LOAD_LOCAL      0
+    000B  CONSOLE_WRITE
+    000C  ASYNC_EXIT
+
+
+6. COMPOUND ASSIGNMENT DESUGARING
+================================================================================
+
+Compound assignments have NO dedicated opcodes. The compiler desugars them:
+
+  Source            Desugared to              Bytecode pattern
+  ──────────────    ──────────────────────    ──────────────────────────
+  x += 1            x = x + 1                 LOAD x, PUSH 1, ADD, STORE x
+  x -= 1            x = x - 1                 LOAD x, PUSH 1, SUB, STORE x
+  x *= 2            x = x * 2                 LOAD x, PUSH 2, MUL, STORE x
+  x /= 2            x = x / 2                 LOAD x, PUSH 2, DIV, STORE x
+  x //= 2           x = x // 2                LOAD x, PUSH 2, IDIV, STORE x
+  x %= 3            x = x % 3                 LOAD x, PUSH 3, MOD, STORE x
+  x **= 2           x = x ** 2                LOAD x, PUSH 2, POW, STORE x
+  x &= mask         x = x & mask              LOAD x, LOAD mask, BIT_AND, STORE x
+  x |= mask         x = x | mask              LOAD x, LOAD mask, BIT_OR, STORE x
+  x ^= mask         x = x ^ mask              LOAD x, LOAD mask, BIT_XOR, STORE x
+  x <<= 2           x = x << 2                LOAD x, PUSH 2, LSHIFT, STORE x
+  x >>= 2           x = x >> 2                LOAD x, PUSH 2, RSHIFT, STORE x
+  x++               x = x + 1                 INC_LOCAL index  (shortcut)
+  x--               x = x - 1                 DEC_LOCAL index  (shortcut)
+
+
+7. TERNARY OPERATOR DESUGARING
+================================================================================
+
+  Source:  var r : int = x > 0 ? x : -x;
+
+  Bytecode:
+    LOAD x
+    PUSH_INT 0
+    CMP_GT
+    JUMP_IF_FALSE +8       # → else branch
+    LOAD x                  # true branch
+    JUMP +5                 # → end
+    LOAD x                  # false branch
+    NEG
+    STORE_LOCAL 0           # r = result
+
+
+8. STRICT TYPING ENFORCEMENT SUMMARY
+================================================================================
+
+  - DECLARE_VAR / DECLARE_CONST embed type descriptors in the constant pool.
+  - TYPE_CHECK opcode validates runtime type after every function return
+    and every explicit cast.
+  - CAST opcode performs strict narrowing/widening; throws TypeError on
+    incompatible types.
+  - INSTANCE_OF checks class hierarchy at runtime.
+  - All arithmetic opcodes (ADD, SUB, MUL, DIV, IDIV, MOD, POW) verify
+    that both operands share a compatible numeric type; implicit widening
+    from int → double is allowed, all other mismatches throw TypeError.
+  - String concatenation (ADD with str operands or CONCAT) is the only
+    allowed mixed-type arithmetic.
+
+================================================================================
+                            END OF SPECIFICATION
+================================================================================

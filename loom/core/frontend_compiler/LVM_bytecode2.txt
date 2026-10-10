@@ -1,0 +1,994 @@
+================================================================================
+          LOOM VIRTUAL MACHINE (LVM) — BYTECODE SPECIFICATION
+================================================================================
+Version : 1.0
+Language: LOOM (strict-typed, multi-paradigm)
+Author  : LVM Spec
+================================================================================
+
+TABLE OF CONTENTS
+  1. Architecture Overview
+  2. Value Representation (Strict Typing)
+  3. Instruction Format
+  4. Type Tags
+  5. Constant Pool
+  6. Complete Opcode Reference
+     6.1  Stack & Constants       (0x00 – 0x0F)
+     6.2  Variables & Memory      (0x10 – 0x1F)
+     6.3  Arithmetic              (0x20 – 0x2F)
+     6.4  Comparison & Logic      (0x30 – 0x3F)
+     6.5  Bitwise                 (0x40 – 0x4F)
+     6.6  Control Flow            (0x50 – 0x5F)
+     6.7  Functions & Closures    (0x60 – 0x6F)
+     6.8  OOP & Data Structures   (0x70 – 0x7F)
+     6.9  I/O, Iterators, Func.   (0x80 – 0x8F)
+     6.10 Error Handling & Async  (0x90 – 0x9F)
+     6.11 Type System            (0xA0 – 0xAF)
+     6.12 Special / Meta         (0xF0 – 0xFF)
+  7. Desugaring Rules
+  8. Compilation Examples
+  9. Token-to-Opcode Mapping
+
+================================================================================
+1. ARCHITECTURE OVERVIEW
+================================================================================
+
+The Loom Virtual Machine (LVM) is a STACK-BASED virtual machine.
+
+  - Operand Stack   : holds intermediate values during expression evaluation.
+  - Call Stack      : composed of Frames. Each function call pushes a Frame
+                      containing local variables, a return address, and a
+                      pointer into the operand stack.
+  - Heap            : stores objects, arrays, strings, closures, iterators,
+                      and any reference-type value.
+  - Constant Pool   : per-module table of literals (int, double, str, char),
+                      class references, function references, and interned
+                      identifier names. Instructions reference constants by
+                      u16 index.
+  - Global Table    : hash map of global variable name -> value.
+  - Upvalue Array   : per-closure array capturing variables from enclosing
+                      scopes (for lambdas and nested functions).
+
+Execution model:
+  The VM fetches one instruction at a time from the bytecode array, decodes
+  the opcode and its operands, executes the operation, and advances the
+  instruction pointer (IP).
+
+================================================================================
+2. VALUE REPRESENTATION (STRICT TYPING)
+================================================================================
+
+Every runtime value is a TAGGED UNION. The tag enforces strict typing at
+runtime as a safety net (the compiler also checks types statically).
+
+  struct LoomValue {
+      uint8_t  type_tag;   // see Section 4
+      union {
+          int64_t   i;     // TYPE_INT
+          double    d;     // TYPE_DOUBLE
+          uint8_t   c;     // TYPE_CHAR
+          bool      b;     // TYPE_BOOL
+          void*     ptr;   // TYPE_STR, TYPE_ARRAY, TYPE_DICT, TYPE_OBJ,
+                           // TYPE_FUNC, TYPE_CLOSURE, TYPE_ITER,
+                           // TYPE_RANGE, TYPE_MUTEX, TYPE_SEMAPHORE
+      } as;
+  };
+
+  Special sentinel: TYPE_NULL (tag only, no payload).
+
+Type mismatches at runtime (e.g. ADD on TYPE_STR and TYPE_INT) cause the
+VM to raise a TypeError exception rather than performing implicit coercion.
+
+================================================================================
+3. INSTRUCTION FORMAT
+================================================================================
+
+Each instruction is:
+
+  [ OPCODE : 1 byte ] [ OPERAND : 0, 1, 2, or 8 bytes ]
+
+Operand encoding:
+  u8   – unsigned 8-bit  (local slot, arg count, flags)
+  u16  – unsigned 16-bit big-endian (constant pool index, name index, offset)
+  i16  – signed 16-bit big-endian (jump offset, relative to next instruction)
+  i64  – signed 64-bit big-endian (inline integer literal)
+  f64  – IEEE 754 double (inline double literal)
+
+Jump offsets are RELATIVE to the address of the NEXT instruction (i.e. the
+instruction immediately following the current one). Positive = forward,
+negative = backward.
+
+================================================================================
+4. TYPE TAGS
+================================================================================
+
+Used by CHECK_TYPE, CAST, and the internal type_tag field of LoomValue.
+
+  Tag   Name              LOOM keyword
+  ───   ────────────────  ────────────
+  0x00  TYPE_NULL         (no keyword, implicit)
+  0x01  TYPE_INT          int
+  0x02  TYPE_DOUBLE       double
+  0x03  TYPE_STR          str
+  0x04  TYPE_CHAR         char
+  0x05  TYPE_BOOL         bool
+  0x06  TYPE_VOID         void
+  0x07  TYPE_ARRAY        (type[])
+  0x08  TYPE_DICT         (dict literal)
+  0x09  TYPE_OBJ          (class instance)
+  0x0A  TYPE_FUNC         (function reference)
+  0x0B  TYPE_CLOSURE      (lambda / closure)
+  0x0C  TYPE_ITER         (iterator object)
+  0x0D  TYPE_RANGE        (range object)
+  0x0E  TYPE_MUTEX        (mutex object)
+  0x0F  TYPE_SEMAPHORE    (semaphore object)
+
+================================================================================
+5. CONSTANT POOL
+================================================================================
+
+Each compiled module has a constant pool. Entries are indexed by u16.
+
+  Entry types:
+    CONST_INT    : int64_t
+    CONST_DOUBLE : double
+    CONST_STR    : length-prefixed UTF-8 string
+    CONST_CHAR   : single byte
+    CONST_NAME   : interned identifier string (for attr access, globals, etc.)
+    CONST_FUNC   : offset into bytecode where function body starts
+    CONST_CLASS  : class descriptor pointer
+
+================================================================================
+6. COMPLETE OPCODE REFERENCE
+================================================================================
+
+────────────────────────────────────────────────────────────────────────────────
+6.1  STACK & CONSTANTS  (0x00 – 0x0F)
+────────────────────────────────────────────────────────────────────────────────
+
+  0x00  NOP
+        No operation. Used for padding or as a jump target placeholder.
+
+  0x01  PUSH_CONST  <u16 index>
+        Push the constant at pool[index] onto the stack.
+
+  0x02  PUSH_INT  <i64 value>
+        Push an inline 64-bit integer onto the stack. (Fast path for small
+        integers that fit in the bytecode stream.)
+
+  0x03  PUSH_DOUBLE  <f64 value>
+        Push an inline 64-bit IEEE 754 double onto the stack.
+
+  0x04  PUSH_BOOL  <u8 value>
+        Push a boolean. 0 = false, 1 = true.
+
+  0x05  PUSH_CHAR  <u8 value>
+        Push a single character (ASCII / UTF-8 code unit).
+
+  0x06  PUSH_NULL
+        Push the null sentinel value.
+
+  0x07  POP
+        Discard the top value on the stack.
+
+  0x08  DUP
+        Duplicate the top value on the stack.
+
+  0x09  DUP2
+        Duplicate the top two values on the stack (a b -> a b a b).
+
+  0x0A  SWAP
+        Swap the top two values (a b -> b a).
+
+  0x0B  ROT3
+        Rotate the top three values (a b c -> b c a).
+
+────────────────────────────────────────────────────────────────────────────────
+6.2  VARIABLES & MEMORY  (0x10 – 0x1F)
+────────────────────────────────────────────────────────────────────────────────
+
+  0x10  LOAD_LOCAL  <u8 slot>
+        Push the value of local variable at frame slot `slot`.
+
+  0x11  STORE_LOCAL  <u8 slot>
+        Pop a value and store it into local variable at frame slot `slot`.
+
+  0x12  LOAD_GLOBAL  <u16 name_index>
+        Look up the global variable whose name is at pool[name_index] and
+        push its value.
+
+  0x13  STORE_GLOBAL  <u16 name_index>
+        Pop a value and store it into the global variable named
+        pool[name_index].
+
+  0x14  LOAD_UPVALUE  <u16 index>
+        Push the value of upvalue[index] from the current closure.
+
+  0x15  STORE_UPVALUE  <u16 index>
+        Pop a value and store it into upvalue[index] of the current closure.
+
+  0x16  CLOSE_UPVALUE
+        Close (move to heap) the most recently captured upvalue. Emitted at
+        the end of a scope that declares a variable captured by a closure.
+
+  0x17  LOAD_ATTR  <u16 name_index>
+        Pop an object. Push the value of its attribute named pool[name_index].
+        Implements: obj.field
+
+  0x18  STORE_ATTR  <u16 name_index>
+        Pop a value, then pop an object. Set the object's attribute named
+        pool[name_index] to the value. Implements: obj.field = value
+
+  0x19  LOAD_INDEX
+        Pop an index, then pop a container (array or dict). Push
+        container[index]. Implements: arr[i] / dict[key]
+
+  0x1A  STORE_INDEX
+        Pop a value, pop an index, pop a container. Set container[index]
+        to value. Implements: arr[i] = val / dict[key] = val
+
+  0x1B  LOAD_NS  <u16 name_index>
+        Resolve a namespace-qualified name (e.g. std::io). Push the
+        resolved module/namespace object. Uses pool[name_index] which
+        stores the full qualified path.
+
+────────────────────────────────────────────────────────────────────────────────
+6.3  ARITHMETIC  (0x20 – 0x2F)
+────────────────────────────────────────────────────────────────────────────────
+  All binary ops: pop B, pop A, push (A op B).
+  Runtime type check: both operands must be numeric (INT or DOUBLE).
+  If one is DOUBLE and the other INT, the INT is promoted to DOUBLE.
+  Mismatched types (e.g. STR + INT) raise TypeError.
+
+  0x20  ADD       (+)
+  0x21  SUB       (-)
+  0x22  MUL       (*)
+  0x23  DIV       (/)   — always produces DOUBLE
+  0x24  IDIV      (//)  — integer division, truncates toward zero; both
+                          operands must be INT (or promoted); result is INT
+  0x25  MOD       (%)   — remainder; INT % INT -> INT, otherwise DOUBLE
+  0x26  POW       (**)  — exponentiation; INT ** INT -> INT if exponent >= 0,
+                          otherwise DOUBLE
+  0x27  NEG       (-x)  — unary negation; pop A, push -A
+  0x28  INC_LOCAL <u8 slot>
+        Increment local variable at `slot` by 1 (in-place). Does NOT push
+        a value (used for postfix ++ as a statement).
+  0x29  DEC_LOCAL <u8 slot>
+        Decrement local variable at `slot` by 1 (in-place). Does NOT push
+        a value (used for postfix -- as a statement).
+
+────────────────────────────────────────────────────────────────────────────────
+6.4  COMPARISON & LOGIC  (0x30 – 0x3F)
+────────────────────────────────────────────────────────────────────────────────
+  Comparison ops: pop B, pop A, push BOOL (A op B).
+
+  0x30  EQ        (==)
+  0x31  NEQ       (!=)
+  0x32  LT        (<)
+  0x33  GT        (>)
+  0x34  LE        (<=)
+  0x35  GE        (>=)
+  0x36  NOT       (!)   — pop A, push !A (logical NOT; A must be BOOL)
+
+  0x37  JUMP_IF_FALSE_SHORT  <i16 offset>
+        Peek at the top of the stack. If it is FALSE, jump by `offset`.
+        Does NOT pop. Used for short-circuit && evaluation.
+
+  0x38  JUMP_IF_TRUE_SHORT  <i16 offset>
+        Peek at the top of the stack. If it is TRUE, jump by `offset`.
+        Does NOT pop. Used for short-circuit || evaluation.
+
+────────────────────────────────────────────────────────────────────────────────
+6.5  BITWISE  (0x40 – 0x4F)
+────────────────────────────────────────────────────────────────────────────────
+  All binary ops: pop B, pop A, push (A op B). Both operands must be INT.
+
+  0x40  BIT_AND   (&)
+  0x41  BIT_OR    (|)
+  0x42  BIT_XOR   (^)
+  0x43  BIT_NOT   (~)   — unary; pop A, push ~A
+  0x44  LSHIFT    (<<)
+  0x45  RSHIFT    (>>)
+
+────────────────────────────────────────────────────────────────────────────────
+6.6  CONTROL FLOW  (0x50 – 0x5F)
+────────────────────────────────────────────────────────────────────────────────
+
+  0x50  JUMP  <i16 offset>
+        Unconditional relative jump.
+
+  0x51  JUMP_IF_FALSE  <i16 offset>
+        Pop a value. If it is FALSE (or NULL), jump by `offset`.
+        Used for: if, while, for conditions.
+
+  0x52  JUMP_IF_TRUE  <i16 offset>
+        Pop a value. If it is TRUE, jump by `offset`.
+
+  0x53  JUMP_IF_FALSE_POP  <i16 offset>
+        Same as JUMP_IF_FALSE but always pops the value regardless of
+        whether the jump is taken. Used in ternary and match compilation.
+
+  0x54  JUMP_IF_TRUE_POP  <i16 offset>
+        Same as JUMP_IF_TRUE but always pops. Used in short-circuit
+        contexts where the value must be consumed.
+
+────────────────────────────────────────────────────────────────────────────────
+6.7  FUNCTIONS & CLOSURES  (0x60 – 0x6F)
+────────────────────────────────────────────────────────────────────────────────
+
+  0x60  CALL  <u8 arg_count>
+        Pop `arg_count` arguments (last arg on top), then pop the callable
+        (function, closure, or class constructor). Push a new call frame
+        and jump to the function's bytecode offset. The return value will
+        be pushed when RETURN is executed.
+
+  0x61  RETURN
+        Pop the top value as the return value. Pop the current call frame.
+        Push the return value onto the caller's stack.
+
+  0x62  RETURN_VOID
+        Return from a void function. Pop the call frame, push TYPE_NULL
+        onto the caller's stack.
+
+  0x63  YIELD
+        Suspend the current generator/coroutine. Pop the top value as the
+        yielded value and push it onto the caller's stack. When resumed,
+        execution continues at the next instruction.
+
+  0x64  CLOSURE  <u16 func_index>
+        Create a closure object from the function at pool[func_index].
+        The compiler emits upvalue descriptors immediately following this
+        instruction (2 bytes each: is_local flag + slot/index). The VM
+        reads these to capture upvalues.
+
+  0x65  LAMBDA  <u16 func_index>
+        Identical to CLOSURE but semantically marks the function as an
+        anonymous lambda expression. The VM treats it the same way.
+
+────────────────────────────────────────────────────────────────────────────────
+6.8  OOP & DATA STRUCTURES  (0x70 – 0x7F)
+────────────────────────────────────────────────────────────────────────────────
+
+  0x70  NEW  <u16 class_index>
+        Allocate a new instance of the class described at pool[class_index].
+        Push the uninitialized object onto the stack. The constructor must
+        be called separately via INVOKE or CALL.
+
+  0x71  LOAD_THIS
+        Push the `this` / `self` reference of the current method's object.
+
+  0x72  LOAD_SUPER
+        Push the superclass reference for the current class context.
+
+  0x73  INVOKE  <u16 name_index> <u8 arg_count>
+        Optimized method call. Pop `arg_count` args, then pop the receiver
+        object. Look up the method named pool[name_index] in the object's
+        class and call it. Equivalent to LOAD_ATTR + CALL but faster.
+
+  0x74  SUPER_INVOKE  <u16 name_index> <u8 arg_count>
+        Like INVOKE but resolves the method in the superclass. Implements
+        super.method(args).
+
+  0x75  BUILD_ARRAY  <u16 count>
+        Pop `count` values from the stack (first element was pushed first).
+        Create a new array and push it.
+
+  0x76  BUILD_DICT  <u16 pair_count>
+        Pop `pair_count * 2` values (key1, val1, key2, val2, ...).
+        Create a new dictionary and push it.
+
+  0x77  BUILD_RANGE  <u8 inclusive>
+        Pop `end`, pop `start`. Create a range iterator object.
+        If inclusive == 1, the range is start..=end (RANGE_DOTS_EQ).
+        If inclusive == 0, the range is start..end  (RANGE_DOTS).
+        Push the range object.
+
+  0x78  BUILD_STRUCT  <u16 struct_index> <u16 field_count>
+        Pop `field_count` values. Create a struct instance of the type at
+        pool[struct_index] and push it.
+
+  0x79  BUILD_RECORD  <u16 record_index> <u16 field_count>
+        Pop `field_count` values. Create an immutable record instance of
+        the type at pool[record_index] and push it.
+
+────────────────────────────────────────────────────────────────────────────────
+6.9  I/O, ITERATORS & FUNCTIONAL BUILTINS  (0x80 – 0x8F)
+────────────────────────────────────────────────────────────────────────────────
+
+  0x80  CONSOLE_WRITE  <u8 newline>
+        Pop a value, convert it to string, write to stdout.
+        If newline == 1, append a newline character.
+        Implements: console.write(...) / console.writeln(...)
+        The method name (write, writeln, etc.) is resolved at compile time
+        and encoded in the newline flag or an extended operand.
+
+  0x81  INPUT_READ
+        Read a line from stdin. Push the result as a TYPE_STR value.
+        Implements: input()
+
+  0x82  GET_ITER
+        Pop an iterable (array, dict, range, str, or any object with an
+        __iter__ method). Push an iterator object.
+
+  0x83  ITER_NEXT  <i16 jump_offset>
+        Pop an iterator, peek at it (do not discard). Advance the iterator.
+        If the iterator is exhausted, jump by `jump_offset` (to exit the
+        loop). Otherwise, push the next value onto the stack.
+
+  0x84  ENUMERATE
+        Pop an iterable. Push an enumerate-iterator that yields
+        (index, value) pairs as 2-element arrays.
+
+  0x85  ZIP  <u8 count>
+        Pop `count` iterables. Push a zip-iterator that yields tuples
+        (arrays) of corresponding elements.
+
+  0x86  REVERSED
+        Pop an iterable. Push a reversed-iterator.
+
+  0x87  MAP_BUILTIN
+        Pop a callable, pop an iterable. Apply the callable to each element.
+        Push the resulting array. Implements: map(fn, iter)
+
+  0x88  FILTER_BUILTIN
+        Pop a callable (predicate), pop an iterable. Keep elements where
+        predicate returns true. Push the resulting array.
+        Implements: filter(fn, iter)
+
+  0x89  REDUCE_BUILTIN
+        Pop a callable, pop an initial value, pop an iterable.
+        Fold left. Push the final accumulated value.
+        Implements: reduce(fn, iter, init)
+
+────────────────────────────────────────────────────────────────────────────────
+6.10  ERROR HANDLING & CONCURRENCY  (0x90 – 0x9F)
+────────────────────────────────────────────────────────────────────────────────
+
+  0x90  SETUP_EXCEPT  <i16 handler_offset>
+        Register an exception handler at IP + handler_offset. If an
+        exception is thrown while this handler is active, the VM jumps
+        to the handler and pushes the exception object onto the stack.
+
+  0x91  POP_EXCEPT
+        Remove the most recently registered exception handler. Emitted at
+        the end of a try/except block.
+
+  0x92  THROW
+        Pop an exception object and raise it. The VM unwinds the call stack
+        until a matching SETUP_EXCEPT handler is found.
+
+  0x93  RAISE
+        Alias for THROW. Semantically identical. Emitted for the `raise`
+        keyword (vs. `throw` keyword) to preserve source-level distinction
+        in debugging, but the VM executes them identically.
+
+  0x94  ASSERT
+        Pop a condition (BOOL). If FALSE, pop an optional message (STR)
+        and raise an AssertionError. If TRUE, do nothing.
+        The compiler emits: [condition] [message?] ASSERT
+
+  0x95  SPAWN_THREAD  <u8 arg_count>
+        Pop `arg_count` args, pop a callable. Spawn a new OS-level thread
+        executing the callable with the given arguments. Push a thread
+        handle object.
+
+  0x96  SPAWN_PROCESS  <u8 arg_count>
+        Like SPAWN_THREAD but spawns a new OS process. Push a process
+        handle.
+
+  0x97  SPAWN_COROUTINE  <u8 arg_count>
+        Pop `arg_count` args, pop a callable. Create a new coroutine
+        (lightweight cooperative task). Push a coroutine handle.
+
+  0x98  AWAIT
+        Pop a future/coroutine handle. Suspend the current coroutine until
+        the handle completes. Push the result value.
+
+  0x99  LOCK
+        Pop a mutex object. Acquire the lock (block if held by another
+        thread).
+
+  0x9A  UNLOCK
+        Pop a mutex object. Release the lock.
+
+  0x9B  SYNC_ENTER
+        Enter a synchronized block. The compiler emits this before the
+        block body. Uses an implicit per-object monitor.
+
+  0x9C  SYNC_EXIT
+        Exit a synchronized block. Released even if an exception occurred
+        (the compiler wraps the block in an implicit try/finally).
+
+  0x9D  SEMAPHORE_ACQUIRE
+        Pop a semaphore object. Decrement its counter (block if zero).
+
+  0x9E  SEMAPHORE_RELEASE
+        Pop a semaphore object. Increment its counter and wake one waiter.
+
+────────────────────────────────────────────────────────────────────────────────
+6.11  TYPE SYSTEM  (0xA0 – 0xAF)
+────────────────────────────────────────────────────────────────────────────────
+
+  0xA0  CHECK_TYPE  <u8 type_tag>
+        Peek at the top of the stack. If its type_tag does not match the
+        given type_tag, raise a TypeError. Does NOT pop the value.
+        Emitted after variable assignments, function returns, and parameter
+        passing to enforce strict typing at runtime.
+
+  0xA1  CAST  <u8 type_tag>
+        Pop a value, attempt to convert it to the target type, push the
+        result. Raises TypeError if the conversion is invalid.
+        Examples: INT -> DOUBLE (safe), DOUBLE -> INT (truncates),
+        STR -> INT (parses or raises).
+
+  0xA2  TYPEOF
+        Pop a value. Push a TYPE_STR containing the type name
+        (e.g. "int", "str", "MyClass").
+
+  0xA3  IS_NULL
+        Pop a value. Push TRUE if it is TYPE_NULL, FALSE otherwise.
+
+  0xA4  IS_INSTANCE  <u16 class_index>
+        Pop a value. Push TRUE if it is an instance of the class at
+        pool[class_index] (or a subclass), FALSE otherwise.
+
+────────────────────────────────────────────────────────────────────────────────
+6.12  SPECIAL / META  (0xF0 – 0xFF)
+────────────────────────────────────────────────────────────────────────────────
+
+  0xF0  DECORATOR_APPLY  <u16 decorator_index>
+        Pop a callable (function or class). Apply the decorator at
+        pool[decorator_index] to it. Push the decorated callable.
+
+  0xF1  MODULE_LOAD  <u16 module_index>
+        Load and initialize the module at pool[module_index]. Push the
+        module namespace object.
+
+  0xF2  EXPORT_SYMBOL  <u16 name_index>
+        Mark the global variable named pool[name_index] as exported from
+        the current module.
+
+  0xF3  IMPORT_SYMBOL  <u16 module_index> <u16 name_index>
+        Import the symbol named pool[name_index] from the module at
+        pool[module_index] into the current global scope.
+
+  0xFE  BREAKPOINT
+        Debugger breakpoint. Triggers the attached debugger if present;
+        otherwise acts as NOP.
+
+  0xFF  HALT
+        Stop the VM. Program execution ends.
+
+================================================================================
+7. DESUGARING RULES
+================================================================================
+
+The following source-level constructs do NOT have dedicated opcodes. The
+compiler desugars them into sequences of simpler instructions:
+
+  7.1  COMPOUND ASSIGNMENT (+=, -=, *=, /=, //=, %=, **=, &=, |=, ^=, <<=, >>=)
+       Source:   x += expr
+       Desugar:  LOAD_LOCAL <slot>  <expr bytecode>  ADD  STORE_LOCAL <slot>
+       (Replace ADD with the appropriate opcode for each operator.)
+
+  7.2  PREFIX INCREMENT / DECREMENT (++x, --x)
+       Source:   ++x
+       Desugar:  LOAD_LOCAL <slot>  PUSH_INT 1  ADD  DUP  STORE_LOCAL <slot>
+       (The DUP leaves the new value on the stack for use in expressions.)
+
+  7.3  POSTFIX INCREMENT / DECREMENT (x++, x--) as expressions
+       Source:   x++
+       Desugar:  LOAD_LOCAL <slot>  DUP  PUSH_INT 1  ADD  STORE_LOCAL <slot>
+       (The original value remains on top of the stack.)
+
+  7.4  TERNARY OPERATOR (cond ? a : b)
+       Source:   cond ? a : b
+       Desugar:  <cond>  JUMP_IF_FALSE +<skip_a>  <a>  JUMP +<skip_b>
+                 <b>
+
+  7.5  SHORT-CIRCUIT LOGICAL AND (&&)
+       Source:   a && b
+       Desugar:  <a>  JUMP_IF_FALSE_SHORT +<skip_b>  POP  <b>
+
+  7.6  SHORT-CIRCUIT LOGICAL OR (||)
+       Source:   a || b
+       Desugar:  <a>  JUMP_IF_TRUE_SHORT +<skip_b>  POP  <b>
+
+  7.7  SWITCH / CASE
+       Compiled as a chain of:
+         DUP  <case_value>  EQ  JUMP_IF_FALSE +<next_case>
+         POP  <case_body>  JUMP +<end>
+       The DEFAULT clause is the final fallthrough.
+
+  7.8  MATCH / WHEN
+       Similar to switch, but each WHEN arm may include a guard:
+         DUP  <pattern>  EQ  [guard: DUP  STORE_LOCAL  <guard_expr>
+         JUMP_IF_FALSE +<next>]  POP  <arm_body>  JUMP +<end>
+       Wildcard `_` compiles to an unconditional fallthrough (no check).
+
+  7.9  IF / ELIF / ELSE
+       Source:   if (c1) { b1 } elif (c2) { b2 } else { b3 }
+       Desugar:  <c1>  JUMP_IF_FALSE +<to_elif>
+                 <b1>  JUMP +<to_end>
+                 <c2>  JUMP_IF_FALSE +<to_else>
+                 <b2>  JUMP +<to_end>
+                 <b3>
+
+  7.10 WHILE
+       Source:   while (cond) { body }
+       Desugar:  <cond>  JUMP_IF_FALSE +<to_end>
+                 <body>  JUMP -<back_to_cond>
+
+  7.11 DO...WHILE
+       Source:   do { body } while (cond);
+       Desugar:  <body>  <cond>  JUMP_IF_TRUE -<back_to_body>
+
+  7.12 FOR...IN
+       Source:   for (x in iterable) { body }
+       Desugar:  <iterable>  GET_ITER
+                 ITER_NEXT +<to_end>  STORE_LOCAL <x_slot>
+                 <body>  JUMP -<back_to_ITER_NEXT>
+
+  7.13 TRY / EXCEPT / FINALLY
+       Desugar:  SETUP_EXCEPT +<to_handler>
+                 <try_body>
+                 POP_EXCEPT  JUMP +<to_finally>
+                 <handler_body>
+                 POP_EXCEPT
+                 <finally_body>
+
+  7.14 BREAK / CONTINUE
+       Compiled as JUMP to the loop's end (break) or start (continue).
+       The compiler tracks loop nesting to resolve the correct offset.
+
+  7.15 GOTO
+       Compiled as JUMP to the labeled address. The compiler resolves
+       label names to bytecode offsets.
+
+================================================================================
+8. COMPILATION EXAMPLES
+================================================================================
+
+────────────────────────────────────────────────────────────────────────────────
+Example 1: Variable declarations and while loop
+────────────────────────────────────────────────────────────────────────────────
+
+  LOOM source:
+    var x : int = 10;
+    var y : int = 0;
+    while (x > y) {
+        y += 1;
+    }
+
+  Bytecode:
+    Addr  Opcode              Operand       Comment
+    ────  ──────────────────  ──────────    ──────────────────────────────
+    0000  PUSH_INT            10            push 10
+    0009  CHECK_TYPE          0x01          assert type is INT
+    000B  STORE_LOCAL         0             x = 10
+    000D  PUSH_INT            0             push 0
+    0016  CHECK_TYPE          0x01          assert type is INT
+    0018  STORE_LOCAL         1             y = 0
+    ── loop condition ──
+    001A  LOAD_LOCAL          0             push x
+    001C  LOAD_LOCAL          1             push y
+    001E  GT                                push x > y
+    001F  JUMP_IF_FALSE       +0x0010       if false, jump to 0031 (end)
+    ── loop body ──
+    0022  LOAD_LOCAL          1             push y
+    0024  PUSH_INT            1             push 1
+    002D  ADD                               push y + 1
+    002E  CHECK_TYPE          0x01          assert result is INT
+    0030  STORE_LOCAL         1             y = y + 1
+    0032  JUMP                -0x0018       jump back to 001A (condition)
+    ── end ──
+    0035  HALT
+
+────────────────────────────────────────────────────────────────────────────────
+Example 2: Console I/O and input
+────────────────────────────────────────────────────────────────────────────────
+
+  LOOM source:
+    console.write("Enter x: ");
+    var x : int = input();
+
+  Bytecode:
+    Addr  Opcode              Operand       Comment
+    ────  ──────────────────  ──────────    ──────────────────────────────
+    0000  PUSH_CONST          0             pool[0] = "Enter x: "
+    0003  CONSOLE_WRITE       0             write without newline
+    0005  INPUT_READ                        read line from stdin -> STR
+    0006  CAST                0x01          cast STR -> INT
+    0008  CHECK_TYPE          0x01          assert type is INT
+    000A  STORE_LOCAL         0             x = parsed int
+
+────────────────────────────────────────────────────────────────────────────────
+Example 3: For loop with range
+────────────────────────────────────────────────────────────────────────────────
+
+  LOOM source:
+    for (i in 1..5) {
+        console.write(i);
+    }
+
+  Bytecode:
+    Addr  Opcode              Operand       Comment
+    ────  ──────────────────  ──────────    ──────────────────────────────
+    0000  PUSH_INT            1             range start
+    0009  PUSH_INT            5             range end
+    0012  BUILD_RANGE         0             exclusive (1..5)
+    0014  GET_ITER                          get iterator from range
+    ── loop ──
+    0015  ITER_NEXT           +0x000E       if exhausted, jump to 0025
+    0018  STORE_LOCAL         0             i = next value
+    001A  LOAD_LOCAL          0             push i
+    001C  CONSOLE_WRITE       1             write with newline
+    001E  JUMP                -0x0009       back to ITER_NEXT
+    ── end ──
+    0021  POP                               discard iterator
+    0022  HALT
+
+────────────────────────────────────────────────────────────────────────────────
+Example 4: Match statement
+────────────────────────────────────────────────────────────────────────────────
+
+  LOOM source:
+    match x {
+        when 1 => console.write("One"),
+        when 2 => console.write("Two"),
+        when _ => console.write("Other")
+    }
+
+  Bytecode:
+    Addr  Opcode              Operand       Comment
+    ────  ──────────────────  ──────────    ──────────────────────────────
+    0000  LOAD_LOCAL          0             push x
+    ── arm 1: when 1 ──
+    0002  DUP                               duplicate x for comparison
+    0003  PUSH_INT            1
+    000C  EQ                                x == 1 ?
+    000D  JUMP_IF_FALSE       +0x000A       if false, go to arm 2
+    0010  POP                               discard duplicated x
+    0011  PUSH_CONST          0             pool[0] = "One"
+    0014  CONSOLE_WRITE       1
+    0016  JUMP                +0x001E       jump to end of match
+    ── arm 2: when 2 ──
+    0019  DUP
+    001A  PUSH_INT            2
+    0023  EQ
+    0024  JUMP_IF_FALSE       +0x000A
+    0027  POP
+    0028  PUSH_CONST          1             pool[1] = "Two"
+    002B  CONSOLE_WRITE       1
+    002D  JUMP                +0x0007
+    ── arm 3: when _ (wildcard) ──
+    0030  POP                               discard x
+    0031  PUSH_CONST          2             pool[2] = "Other"
+    0034  CONSOLE_WRITE       1
+    ── end ──
+    0036  HALT
+
+────────────────────────────────────────────────────────────────────────────────
+Example 5: Class, constructor, method call
+────────────────────────────────────────────────────────────────────────────────
+
+  LOOM source:
+    class Animal {
+        public name : str;
+        public constructor(n : str) {
+            this.name = n;
+        }
+        public function speak() -> void {
+            console.write(this.name);
+        }
+    }
+    var a : Animal = new Animal("Cat");
+    a.speak();
+
+  Bytecode (main scope):
+    Addr  Opcode              Operand       Comment
+    ────  ──────────────────  ──────────    ──────────────────────────────
+    0000  NEW                 0             pool[0] = Animal class desc
+    0003  DUP                               keep ref for constructor call
+    0004  PUSH_CONST          1             pool[1] = "Cat"
+    0007  INVOKE              2  1          pool[2]="constructor", 1 arg
+    000A  POP                               discard constructor return
+    000B  CHECK_TYPE          0x09          assert type is OBJ
+    000D  STORE_LOCAL         0             a = new Animal("Cat")
+    000F  LOAD_LOCAL          0             push a
+    0011  INVOKE              3  0          pool[3]="speak", 0 args
+    0014  POP                               discard void return
+    0015  HALT
+
+  Bytecode (Animal.constructor):
+    Addr  Opcode              Operand       Comment
+    ────  ──────────────────  ──────────    ──────────────────────────────
+    0000  LOAD_THIS                         push this
+    0001  LOAD_LOCAL          0             push n (param slot 0)
+    0003  CHECK_TYPE          0x03          assert n is STR
+    0005  STORE_ATTR          4             pool[4]="name"; this.name = n
+    0008  RETURN_VOID
+
+  Bytecode (Animal.speak):
+    Addr  Opcode              Operand       Comment
+    ────  ──────────────────  ──────────    ──────────────────────────────
+    0000  LOAD_THIS
+    0001  LOAD_ATTR           4             pool[4]="name"
+    0004  CONSOLE_WRITE       1
+    0006  RETURN_VOID
+
+────────────────────────────────────────────────────────────────────────────────
+Example 6: Lambda and functional builtins
+────────────────────────────────────────────────────────────────────────────────
+
+  LOOM source:
+    var double_it : function(int) -> int = lambda (x : int) -> x * 2;
+    var nums : int[] = [1, 2, 3];
+    var result = map(double_it, nums);
+
+  Bytecode:
+    Addr  Opcode              Operand       Comment
+    ────  ──────────────────  ──────────    ──────────────────────────────
+    0000  LAMBDA              0             pool[0] = lambda body func
+    0003  CHECK_TYPE          0x0B          assert type is CLOSURE
+    0005  STORE_LOCAL         0             double_it = lambda
+    0007  PUSH_INT            1
+    0010  PUSH_INT            2
+    0013  PUSH_INT            3
+    0016  BUILD_ARRAY         3             [1, 2, 3]
+    0019  CHECK_TYPE          0x07          assert type is ARRAY
+    001B  STORE_LOCAL         1             nums = [1, 2, 3]
+    001D  LOAD_LOCAL          0             push double_it
+    001F  LOAD_LOCAL          1             push nums
+    0021  MAP_BUILTIN                       map(double_it, nums)
+    0022  STORE_LOCAL         2             result = mapped array
+
+  Lambda body (x * 2):
+    Addr  Opcode              Operand       Comment
+    ────  ──────────────────  ──────────    ──────────────────────────────
+    0000  LOAD_LOCAL          0             push x
+    0002  CHECK_TYPE          0x01          assert x is INT
+    0004  PUSH_INT            2
+    000D  MUL
+    000E  CHECK_TYPE          0x01          assert result is INT
+    0010  RETURN
+
+────────────────────────────────────────────────────────────────────────────────
+Example 7: Try / Except
+────────────────────────────────────────────────────────────────────────────────
+
+  LOOM source:
+    try {
+        var x : int = input();
+    } except {
+        console.write("Error");
+    }
+
+  Bytecode:
+    Addr  Opcode              Operand       Comment
+    ────  ──────────────────  ──────────    ──────────────────────────────
+    0000  SETUP_EXCEPT        +0x0012       handler at addr 0014
+    0003  INPUT_READ
+    0004  CAST                0x01          STR -> INT
+    0006  CHECK_TYPE          0x01
+    0008  STORE_LOCAL         0
+    000A  POP_EXCEPT                        remove handler
+    000B  JUMP                +0x0008       skip except block -> 0015
+    ── except handler ──
+    000E  POP                               discard exception object
+    000F  PUSH_CONST          0             pool[0] = "Error"
+    0012  CONSOLE_WRITE       1
+    0014  POP_EXCEPT
+    0015  HALT
+
+================================================================================
+9. TOKEN-TO-OPCODE MAPPING (QUICK REFERENCE)
+================================================================================
+
+  LOOM Token/Keyword     Bytecode Opcode(s)
+  ─────────────────────  ─────────────────────────────────────────────
+  LITERAL_INT            PUSH_INT / PUSH_CONST
+  LITERAL_DOUBLE         PUSH_DOUBLE / PUSH_CONST
+  LITERAL_STR            PUSH_CONST
+  LITERAL_CHAR           PUSH_CHAR / PUSH_CONST
+  TRUE / FALSE           PUSH_BOOL
+  ID                     (resolved to slot/index at compile time)
+
+  +  -  *  /             ADD  SUB  MUL  DIV
+  //                     IDIV
+  %                      MOD
+  **                     POW
+  += -= *= /= //= %=     (desugared: LOAD + op + STORE)
+  **= &= |= ^= <<= >>=   (desugared: LOAD + op + STORE)
+  ++ --                  INC_LOCAL / DEC_LOCAL (or desugared)
+  -  (unary)             NEG
+  !                      NOT
+
+  == != < > <= >=        EQ  NEQ  LT  GT  LE  GE
+  &&                     JUMP_IF_FALSE_SHORT (short-circuit)
+  ||                     JUMP_IF_TRUE_SHORT  (short-circuit)
+
+  &  |  ^  ~  <<  >>     BIT_AND  BIT_OR  BIT_XOR  BIT_NOT  LSHIFT  RSHIFT
+
+  =                      STORE_LOCAL / STORE_GLOBAL / STORE_ATTR / STORE_INDEX
+  ?  :                   (ternary desugared to JUMP_IF_FALSE + JUMP)
+
+  ..                     BUILD_RANGE (inclusive=0)
+  ..=                    BUILD_RANGE (inclusive=1)
+
+  ( )  { }  [ ]          (structural, resolved at compile time)
+  ,  :  ;  .             (structural, resolved at compile time)
+  ->                     (compile-time only: return type annotation)
+  =>                     (compile-time only: match arms, lambda body)
+  ::                     LOAD_NS
+  @                      DECORATOR_APPLY
+
+  var / const            STORE_LOCAL / STORE_GLOBAL
+  int double str char    CHECK_TYPE with corresponding type tag
+  bool void              CHECK_TYPE with corresponding type tag
+
+  console                CONSOLE_WRITE
+  input                  INPUT_READ
+
+  if elif else endif     JUMP_IF_FALSE, JUMP
+  switch case default    (desugared to EQ + JUMP_IF_FALSE chain)
+  match when endmatch    (desugared to pattern checks + JUMP)
+
+  while endwhile         JUMP_IF_FALSE, JUMP (backward)
+  do enddo               JUMP (backward), JUMP_IF_FALSE
+  for in of endfor       GET_ITER, ITER_NEXT, JUMP (backward)
+  range                  BUILD_RANGE
+  enumerate              ENUMERATE
+  zip                    ZIP
+  reversed               REVERSED
+  break                  JUMP (forward to loop end)
+  continue               JUMP (backward to loop start)
+  goto                   JUMP (to label address)
+
+  function endfunction   (defines function body; CALL to invoke)
+  lambda                 LAMBDA / CLOSURE
+  return                 RETURN / RETURN_VOID
+  yield                  YIELD
+
+  class endclass         NEW, INVOKE, LOAD_ATTR, STORE_ATTR
+  interface              (compile-time only: vtable generation)
+  abstract               (compile-time metadata)
+  extends implements     (compile-time: class hierarchy setup)
+  super                  LOAD_SUPER, SUPER_INVOKE
+  self / this            LOAD_THIS
+  new                    NEW
+  public private         (compile-time access control metadata)
+  protected static       (compile-time metadata)
+  override               (compile-time vtable override)
+  constructor destructor (compiled as special methods invoked by NEW / GC)
+  struct endstruct       BUILD_STRUCT
+  record                 BUILD_RECORD
+
+  import from as         MODULE_LOAD, IMPORT_SYMBOL
+  export                 EXPORT_SYMBOL
+  module package         MODULE_LOAD, LOAD_NS
+  namespace              LOAD_NS
+
+  try except finally     SETUP_EXCEPT, POP_EXCEPT
+  endtry                 POP_EXCEPT
+  raise                  RAISE
+  throw                  THROW
+  assert                 ASSERT
+
+  async                  (compile-time: marks function as coroutine)
+  await                  AWAIT
+  thread                 SPAWN_THREAD
+  process                SPAWN_PROCESS
+  coroutine              SPAWN_COROUTINE
+  mutex                  (heap-allocated mutex object)
+  semaphore              (heap-allocated semaphore object)
+  lock                   LOCK, UNLOCK
+  sync                   SYNC_ENTER, SYNC_EXIT
+
+  map                    MAP_BUILTIN
+  filter                 FILTER_BUILTIN
+  reduce                 REDUCE_BUILTIN
+
+================================================================================
+END OF SPECIFICATION
+================================================================================
